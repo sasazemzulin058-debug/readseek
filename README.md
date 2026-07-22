@@ -154,12 +154,16 @@ Pass `--help` to any command for command-specific usage.
 
 ## Licensing
 
-The Rust program is under LGPL 2.1+ license. The NPM distribution also contains
-Apache 2.0 licensed components.
+1. `opencode-readseek`: Apache 2.0
+2. `pi-readseek`: Apache 2.0
+3. `readseek`: LGPL 2.1+
+4. `readseek.vim`: Apache 2.0
 
 ### Third Party Attribution
 
-The downloaded Qwen model under Apache 2.0 license.
-
-Q4\_K and Q6\_K block decoding and dot-product implementation are derived from
-[Dwarf Seek 4](https://github.com/antirez/ds4) under MIT license.
+1. Qwen3-VL-2B: Apache 2.0
+   - Downloaded on first use at run-time. The model is not distributed together
+     with ReadSeek.
+2. [Dwarf Seek 4](https://github.com/antirez/ds4): MIT
+   - Q4\_K and Q6\_K block decoding and dot-product implementation are derived
+     works of DS4.
