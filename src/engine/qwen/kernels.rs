@@ -746,7 +746,10 @@ fn dot_q8_0_quantized_scalar(row: &[u8], activation: &Q8Activation) -> f32 {
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn dot_q8_0_quantized_neon(row: &[u8], activation: &Q8Activation) -> f32 {
-    use std::arch::aarch64::*;
+    use std::arch::aarch64::{
+        vaddq_s32, vaddvq_f32, vcvtq_f32_s32, vdupq_n_s32, vget_low_s8, vld1q_s8, vmull_high_s8,
+        vmull_s8, vpaddlq_s16,
+    };
     let mut total = 0.0_f32;
     for ((block, values), activation_scale) in row
         .chunks_exact(Q8_0_BLOCK_BYTES)
@@ -754,26 +757,29 @@ unsafe fn dot_q8_0_quantized_neon(row: &[u8], activation: &Q8Activation) -> f32 
         .zip(&activation.scales)
     {
         let weight_scale = fp16_to_f32(u16::from_le_bytes([block[0], block[1]]));
-        let mut acc = vdupq_n_s32(0);
         let weights_ptr = block[2..].as_ptr().cast::<i8>();
         let values_ptr = values.as_ptr();
 
-        let w0 = vld1q_s8(weights_ptr);
-        let v0 = vld1q_s8(values_ptr);
-        let w1 = vld1q_s8(weights_ptr.add(16));
-        let v1 = vld1q_s8(values_ptr.add(16));
+        let block_sum = unsafe {
+            let mut acc = vdupq_n_s32(0);
 
-        let p0 = vmull_s8(vget_low_s8(w0), vget_low_s8(v0));
-        let p1 = vmull_high_s8(w0, v0);
-        let p2 = vmull_s8(vget_low_s8(w1), vget_low_s8(v1));
-        let p3 = vmull_high_s8(w1, v1);
+            let w0 = vld1q_s8(weights_ptr);
+            let v0 = vld1q_s8(values_ptr);
+            let w1 = vld1q_s8(weights_ptr.add(16));
+            let v1 = vld1q_s8(values_ptr.add(16));
 
-        acc = vaddq_s32(acc, vpaddlq_s16(p0));
-        acc = vaddq_s32(acc, vpaddlq_s16(p1));
-        acc = vaddq_s32(acc, vpaddlq_s16(p2));
-        acc = vaddq_s32(acc, vpaddlq_s16(p3));
+            let p0 = vmull_s8(vget_low_s8(w0), vget_low_s8(v0));
+            let p1 = vmull_high_s8(w0, v0);
+            let p2 = vmull_s8(vget_low_s8(w1), vget_low_s8(v1));
+            let p3 = vmull_high_s8(w1, v1);
 
-        let block_sum = vaddvq_s32(acc) as f32;
+            acc = vaddq_s32(acc, vpaddlq_s16(p0));
+            acc = vaddq_s32(acc, vpaddlq_s16(p1));
+            acc = vaddq_s32(acc, vpaddlq_s16(p2));
+            acc = vaddq_s32(acc, vpaddlq_s16(p3));
+
+            vaddvq_f32(vcvtq_f32_s32(acc))
+        };
         total += weight_scale * activation_scale * block_sum;
     }
     total
