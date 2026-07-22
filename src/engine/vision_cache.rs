@@ -263,8 +263,7 @@ pub(crate) fn remove_stale(readseek_dir: &Path, active: &HashSet<String>) -> Res
                 continue;
             };
             let hash_hex = format!("{prefix}{stem}");
-            if hash_hex.len() == HASH_HEX_LEN
-                && hex::decode(&hash_hex).is_ok()
+            if crate::engine::hash::is_hex(&hash_hex, Some(HASH_HEX_LEN))
                 && !active.contains(&hash_hex)
             {
                 fs::remove_file(&path)?;

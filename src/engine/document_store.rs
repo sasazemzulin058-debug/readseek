@@ -17,8 +17,7 @@ const SCHEMA_VERSION: i64 = 3;
 
 pub(crate) fn pdf_hash(path: &Path) -> Option<String> {
     let bytes = fs::read(path).ok()?;
-    let is_pdf = bytes.starts_with(b"%PDF-")
-        || infer::get(&bytes).is_some_and(|kind| kind.mime_type() == "application/pdf");
+    let is_pdf = bytes.starts_with(b"%PDF-");
     is_pdf.then(|| crate::engine::hash::hash_bytes(&bytes))
 }
 
@@ -41,7 +40,7 @@ pub(crate) fn remove_stale(
         let Some(id) = name.to_str() else {
             continue;
         };
-        if id.len() == 64 && hex::decode(id).is_ok() && !active_hashes.contains(id) {
+        if crate::engine::hash::is_hex(id, Some(64)) && !active_hashes.contains(id) {
             fs::remove_dir_all(entry.path())?;
             removed += 1;
         }

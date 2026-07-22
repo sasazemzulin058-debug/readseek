@@ -209,12 +209,60 @@ pub(crate) fn read_source_containing_with_buffer(
     ))
 }
 
+fn detect_mime(bytes: &[u8]) -> Option<String> {
+    if bytes.starts_with(b"%PDF-") {
+        return Some("application/pdf".to_owned());
+    }
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some("image/png".to_owned());
+    }
+    if bytes.starts_with(b"\xff\xd8\xff") {
+        return Some("image/jpeg".to_owned());
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif".to_owned());
+    }
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp".to_owned());
+    }
+    if bytes.starts_with(b"BM") {
+        return Some("image/bmp".to_owned());
+    }
+    if bytes.starts_with(b"II*\x00") || bytes.starts_with(b"MM\x00*") {
+        return Some("image/tiff".to_owned());
+    }
+    if bytes.starts_with(b"#!") {
+        return Some("text/x-shellscript".to_owned());
+    }
+
+    let mut start = 0;
+    if bytes.starts_with(b"\xef\xbb\xbf") {
+        start += 3;
+    }
+    while start < bytes.len() && bytes[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    let rest = &bytes[start..];
+
+    if rest.starts_with(b"<?xml") || rest.starts_with(b"<?XML") {
+        return Some("text/xml".to_owned());
+    }
+    if rest.len() >= 14 && rest[..14].eq_ignore_ascii_case(b"<!doctype html") {
+        return Some("text/html".to_owned());
+    }
+    if rest.len() >= 5 && rest[..5].eq_ignore_ascii_case(b"<html") {
+        return Some("text/html".to_owned());
+    }
+
+    None
+}
+
 pub(crate) fn load_indexable_source(
     path: &Path,
     language: Option<Language>,
 ) -> Result<Option<SourceFile>> {
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let mime = infer::get(&bytes).map(|kind| kind.mime_type().to_owned());
+    let mime = detect_mime(&bytes);
     if !is_plaintext(&bytes, mime.as_deref()) {
         return Ok(None);
     }
@@ -289,13 +337,16 @@ pub(crate) fn source_from_text(
 }
 
 fn load_document(path: &Path, bytes: Vec<u8>) -> Result<LoadedDocument> {
-    let mime = infer::get(&bytes).map(|kind| kind.mime_type().to_owned());
+    let mut mime = detect_mime(&bytes);
 
     let (category, text, document_bytes) = if is_plaintext(&bytes, mime.as_deref()) {
         let text = String::from_utf8(bytes)
             .with_context(|| format!("{} is not UTF-8 text", path.display()))?;
         (ContentCategory::Text, text, None)
     } else if let Some(image) = crate::engine::image::probe(&bytes) {
+        if mime.is_none() {
+            mime = Some(image.format.mime_type().to_owned());
+        }
         (ContentCategory::Image(image), String::new(), Some(bytes))
     } else if mime.as_deref() == Some("application/pdf") || bytes.starts_with(b"%PDF-") {
         let pdf = crate::engine::pdf::probe(&bytes)?;

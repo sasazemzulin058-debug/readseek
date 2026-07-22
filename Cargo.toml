@@ -22,10 +22,7 @@ blake3 = "1.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 git2 = { version = "0.20", default-features = false }
-hex = "0.4"
-imagesize = "0.14"
 dirs = "6"
-infer = "0.19"
 indicatif = "0.17"
 memchr = "2.7"
 memmap2 = "0.9"
@@ -78,7 +75,7 @@ tree-sitter-zig = "1.1"
 ts-parser-perl = "1.1"
 xxhash-rust = { version = "0.8.15", features = ["xxh32"] }
 zerocopy = { version = "0.8", features = ["derive"] }
-crc = "3.4.0"
+crc32fast = "1.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
 
 sha2 = "0.10"

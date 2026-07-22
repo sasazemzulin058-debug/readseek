@@ -394,7 +394,7 @@ impl Q8KActivation {
                     .round_ties_even()
                     .clamp(-128.0, 127.0)
                     .to_i8()
-                    .expect("normalized Q8_K value is in i8 range")
+                    .unwrap_or(0)
             }));
             sums.extend(
                 values[start..]
@@ -468,8 +468,8 @@ fn dot_q4_k_q8_k_scalar(row: &[u8], activation: &Q8KActivation) -> f32 {
                     * i32::from(values[group * 32 + index]);
             }
         }
-        sum += scale * product_sum.to_f32().expect("i32 converts to f32")
-            + minimum * minimum_sum.to_f32().expect("i32 converts to f32");
+        sum += scale * product_sum.to_f32().unwrap_or(0.0)
+            + minimum * minimum_sum.to_f32().unwrap_or(0.0);
     }
     sum
 }
@@ -504,7 +504,7 @@ fn dot_q6_k_q8_k_scalar(row: &[u8], activation: &Q8KActivation) -> f32 {
                 }
             }
         }
-        sum += scale * product_sum.to_f32().expect("i64 converts to f32");
+        sum += scale * product_sum.to_f32().unwrap_or(0.0);
     }
     sum
 }
@@ -545,8 +545,8 @@ unsafe fn dot_q4_k_q8_k_avx2(row: &[u8], activation: &Q8KActivation) -> f32 {
             product_sum +=
                 i32::from(group_scale) * unsafe { dot_u8_i8_avx2(unpacked, activation_values) };
         }
-        sum += scale * product_sum.to_f32().expect("i32 converts to f32")
-            + minimum * minimum_sum.to_f32().expect("i32 converts to f32");
+        sum += scale * product_sum.to_f32().unwrap_or(0.0)
+            + minimum * minimum_sum.to_f32().unwrap_or(0.0);
     }
     sum
 }
@@ -583,7 +583,7 @@ unsafe fn dot_q6_k_q8_k_avx2(row: &[u8], activation: &Q8KActivation) -> f32 {
                     unpacked[index] = i8::try_from(
                         i16::from(low_value) | (i16::from((high[index] >> (group * 2)) & 3) << 4),
                     )
-                    .expect("six-bit value fits i8")
+                    .unwrap_or(0)
                         - 32;
                 }
                 let weights = unsafe { _mm256_loadu_si256(unpacked.as_ptr().cast()) };
@@ -595,7 +595,7 @@ unsafe fn dot_q6_k_q8_k_avx2(row: &[u8], activation: &Q8KActivation) -> f32 {
                     i64::from(i8::from_ne_bytes([scales[group * 2 + 1]])) * i64::from(second);
             }
         }
-        sum += scale * product_sum.to_f32().expect("i64 converts to f32");
+        sum += scale * product_sum.to_f32().unwrap_or(0.0);
     }
     sum
 }
@@ -675,7 +675,7 @@ impl Q8Activation {
                     .round()
                     .clamp(-127.0, 127.0)
                     .to_i8()
-                    .expect("scale is clamped into i8 range")
+                    .unwrap_or(0)
             }));
         }
         Ok(Self { scales, values })
@@ -687,6 +687,8 @@ enum Q8DotKernel {
     Scalar,
     #[cfg(target_arch = "x86_64")]
     Avx2,
+    #[cfg(target_arch = "aarch64")]
+    Neon,
 }
 
 impl Q8DotKernel {
@@ -698,6 +700,11 @@ impl Q8DotKernel {
             if std::is_x86_feature_detected!("avx2") {
                 return Self::Avx2;
             }
+            #[cfg(target_arch = "aarch64")]
+            {
+                return Self::Neon;
+            }
+            #[allow(unreachable_code)]
             Self::Scalar
         })
     }
@@ -710,6 +717,8 @@ impl Q8DotKernel {
                 // The variant is only constructed after runtime AVX2 detection.
                 unsafe { dot_q8_0_quantized_avx2(row, activation) }
             }
+            #[cfg(target_arch = "aarch64")]
+            Self::Neon => unsafe { dot_q8_0_quantized_neon(row, activation) },
         }
     }
 }
@@ -732,6 +741,42 @@ fn dot_q8_0_quantized_scalar(row: &[u8], activation: &Q8Activation) -> f32 {
         sum += weight_scale * activation_scale * block_sum;
     }
     sum
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn dot_q8_0_quantized_neon(row: &[u8], activation: &Q8Activation) -> f32 {
+    use std::arch::aarch64::*;
+    let mut total = 0.0_f32;
+    for ((block, values), activation_scale) in row
+        .chunks_exact(Q8_0_BLOCK_BYTES)
+        .zip(activation.values.chunks_exact(Q8_0_BLOCK_VALUES))
+        .zip(&activation.scales)
+    {
+        let weight_scale = fp16_to_f32(u16::from_le_bytes([block[0], block[1]]));
+        let mut acc = vdupq_n_s32(0);
+        let weights_ptr = block[2..].as_ptr().cast::<i8>();
+        let values_ptr = values.as_ptr();
+
+        let w0 = vld1q_s8(weights_ptr);
+        let v0 = vld1q_s8(values_ptr);
+        let w1 = vld1q_s8(weights_ptr.add(16));
+        let v1 = vld1q_s8(values_ptr.add(16));
+
+        let p0 = vmull_s8(vget_low_s8(w0), vget_low_s8(v0));
+        let p1 = vmull_high_s8(w0, v0);
+        let p2 = vmull_s8(vget_low_s8(w1), vget_low_s8(v1));
+        let p3 = vmull_high_s8(w1, v1);
+
+        acc = vaddq_s32(acc, vpaddlq_s16(p0));
+        acc = vaddq_s32(acc, vpaddlq_s16(p1));
+        acc = vaddq_s32(acc, vpaddlq_s16(p2));
+        acc = vaddq_s32(acc, vpaddlq_s16(p3));
+
+        let block_sum = vaddvq_s32(acc) as f32;
+        total += weight_scale * activation_scale * block_sum;
+    }
+    total
 }
 
 #[cfg(target_arch = "x86_64")]

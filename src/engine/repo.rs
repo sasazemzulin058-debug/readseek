@@ -7,8 +7,13 @@ use crate::engine::lang::{AnalysisEngine, Language};
 use crate::engine::source::{SourceFile, SourceMap, Symbol};
 use crate::engine::symbols;
 use anyhow::{Context, Result, bail};
-use crc::CRC_32_ISO_HDLC;
 use rayon::prelude::*;
+
+fn crc32_checksum(data: &[u8]) -> u32 {
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(data);
+    hasher.finalize()
+}
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -198,10 +203,7 @@ pub(crate) fn init(dir: &Path) -> Result<InitResult> {
 }
 
 fn hex_hash_to_raw(hex_str: &str) -> Result<[u8; BLAKE3_RAW_LEN]> {
-    let mut raw = [0u8; BLAKE3_RAW_LEN];
-    hex::decode_to_slice(hex_str, &mut raw)
-        .with_context(|| format!("invalid hex hash: {hex_str}"))?;
-    Ok(raw)
+    crate::engine::hash::decode_hex(hex_str).with_context(|| format!("invalid hex hash: {hex_str}"))
 }
 
 fn map_path(readseek_dir: &Path, hash_hex: &str) -> PathBuf {
@@ -260,8 +262,7 @@ pub(crate) fn load_map(
         return Ok(None);
     }
 
-    let crc32 = crc::Crc::<u32>::new(&CRC_32_ISO_HDLC);
-    let computed = crc32.checksum(&data[HEADER_SIZE..]);
+    let computed = crc32_checksum(&data[HEADER_SIZE..]);
     if header.checksum.get() != computed {
         tracing::debug!(target: "tracing", "checksum mismatch in {}", path.display());
         return Ok(None);
@@ -456,8 +457,7 @@ pub(crate) fn store_map(
         buf.extend_from_slice(entry.as_bytes());
     }
     buf.extend_from_slice(&strtab);
-    let crc32 = crc::Crc::<u32>::new(&CRC_32_ISO_HDLC);
-    let checksum = crc32.checksum(&buf[HEADER_SIZE..]);
+    let checksum = crc32_checksum(&buf[HEADER_SIZE..]);
     buf[CHECKSUM_OFFSET..CHECKSUM_OFFSET + size_of::<U32<LittleEndian>>()]
         .copy_from_slice(&checksum.to_le_bytes());
 
@@ -496,8 +496,7 @@ pub(crate) fn load_index(readseek_dir: &Path, name: &str) -> Result<Option<Vec<P
         );
         return Ok(None);
     }
-    let crc32 = crc::Crc::<u32>::new(&CRC_32_ISO_HDLC);
-    if header.checksum.get() != crc32.checksum(&data[INDEX_HEADER_SIZE..]) {
+    if header.checksum.get() != crc32_checksum(&data[INDEX_HEADER_SIZE..]) {
         tracing::debug!(target: "tracing", "checksum mismatch in {}", path.display());
         return Ok(None);
     }
@@ -817,8 +816,7 @@ fn serialize_shard(shard: &BTreeMap<String, Vec<PathBuf>>) -> Result<Vec<u8>> {
     }
     buf.extend_from_slice(&strtab);
 
-    let crc32 = crc::Crc::<u32>::new(&CRC_32_ISO_HDLC);
-    let checksum = crc32.checksum(&buf[INDEX_HEADER_SIZE..]);
+    let checksum = crc32_checksum(&buf[INDEX_HEADER_SIZE..]);
     buf[INDEX_CHECKSUM_OFFSET..INDEX_CHECKSUM_OFFSET + size_of::<U32<LittleEndian>>()]
         .copy_from_slice(&checksum.to_le_bytes());
 
@@ -864,8 +862,7 @@ fn remove_stale_maps(readseek_dir: &Path, active_hashes: &HashSet<String>) -> Re
                         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
                     if let Some(prefix) = parent {
                         let hash_hex = format!("{prefix}{hash_fragment}");
-                        if hash_hex.len() == BLAKE3_RAW_LEN * 2
-                            && hex::decode(&hash_hex).is_ok()
+                        if crate::engine::hash::is_hex(&hash_hex, Some(BLAKE3_RAW_LEN * 2))
                             && !active_hashes.contains(&hash_hex)
                         {
                             fs::remove_file(file_entry.path())?;

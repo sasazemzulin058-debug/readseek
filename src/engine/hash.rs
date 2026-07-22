@@ -74,3 +74,35 @@ pub(crate) fn hash_text(text: &str) -> String {
 pub(crate) fn hash_bytes(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_string()
 }
+
+/// Check if a string is a valid hex string of expected length (or any length if expected is None).
+pub(crate) fn is_hex(s: &str, expected_len: Option<usize>) -> bool {
+    if expected_len.is_some_and(|len| s.len() != len) {
+        return false;
+    }
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Decode a hex string into a fixed-size byte array.
+pub(crate) fn decode_hex<const N: usize>(s: &str) -> Result<[u8; N]> {
+    if s.len() != N * 2 {
+        bail!("invalid hex length {}, expected {}", s.len(), N * 2);
+    }
+    let mut out = [0u8; N];
+    for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
+        let h = match chunk[0] {
+            b'0'..=b'9' => chunk[0] - b'0',
+            b'a'..=b'f' => chunk[0] - b'a' + 10,
+            b'A'..=b'F' => chunk[0] - b'A' + 10,
+            _ => bail!("invalid hex character"),
+        };
+        let l = match chunk[1] {
+            b'0'..=b'9' => chunk[1] - b'0',
+            b'a'..=b'f' => chunk[1] - b'a' + 10,
+            b'A'..=b'F' => chunk[1] - b'A' + 10,
+            _ => bail!("invalid hex character"),
+        };
+        out[i] = (h << 4) | l;
+    }
+    Ok(out)
+}

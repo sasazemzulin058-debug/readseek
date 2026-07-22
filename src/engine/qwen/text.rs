@@ -5,7 +5,6 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, ensure};
-use num_traits::ToPrimitive;
 use rayon::prelude::*;
 
 use super::gguf::{Gguf, TensorType};
@@ -530,8 +529,10 @@ struct ImRope {
 /// exceed `u16`, so the exact-dimension helper does not apply; the checked
 /// `to_f32()` is total for `u32` (every value is representable in `f32`)
 /// while keeping the lossiness explicit at the call site.
+use num_traits::ToPrimitive;
+
 fn position_to_f32(position: u32) -> f32 {
-    position.to_f32().expect("any u32 maps to a finite f32")
+    position.to_f32().unwrap_or(0.0)
 }
 impl ImRope {
     fn new(position: Position) -> Self {

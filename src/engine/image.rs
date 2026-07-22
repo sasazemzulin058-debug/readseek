@@ -142,23 +142,36 @@ pub(crate) enum ImageFormat {
     Bmp,
     Tiff,
     Avif,
+    #[allow(dead_code)]
     Heic,
     Ico,
 }
 
 impl ImageFormat {
-    fn from_image_type(kind: imagesize::ImageType) -> Option<Self> {
-        use imagesize::{Compression, ImageType};
+    pub(crate) fn mime_type(self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Jpeg => "image/jpeg",
+            Self::Gif => "image/gif",
+            Self::WebP => "image/webp",
+            Self::Bmp => "image/bmp",
+            Self::Tiff => "image/tiff",
+            Self::Avif => "image/avif",
+            Self::Heic => "image/heic",
+            Self::Ico => "image/x-icon",
+        }
+    }
+
+    fn from_image_format(kind: image::ImageFormat) -> Option<Self> {
         Some(match kind {
-            ImageType::Png => Self::Png,
-            ImageType::Jpeg => Self::Jpeg,
-            ImageType::Gif => Self::Gif,
-            ImageType::Webp => Self::WebP,
-            ImageType::Bmp => Self::Bmp,
-            ImageType::Tiff => Self::Tiff,
-            ImageType::Ico => Self::Ico,
-            ImageType::Heif(Compression::Av1) => Self::Avif,
-            ImageType::Heif(Compression::Hevc) => Self::Heic,
+            image::ImageFormat::Png => Self::Png,
+            image::ImageFormat::Jpeg => Self::Jpeg,
+            image::ImageFormat::Gif => Self::Gif,
+            image::ImageFormat::WebP => Self::WebP,
+            image::ImageFormat::Bmp => Self::Bmp,
+            image::ImageFormat::Tiff => Self::Tiff,
+            image::ImageFormat::Ico => Self::Ico,
+            image::ImageFormat::Avif => Self::Avif,
             _ => return None,
         })
     }
@@ -211,8 +224,11 @@ fn encode_image(image: &DynamicImage) -> Result<(&'static str, Vec<u8>)> {
 /// best-effort animation flag. Returns `None` when the bytes are not a
 /// supported image.
 pub(crate) fn probe(bytes: &[u8]) -> Option<ImageInfo> {
-    let format = ImageFormat::from_image_type(imagesize::image_type(bytes).ok()?)?;
-    let size = imagesize::blob_size(bytes).ok()?;
+    let reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let format = ImageFormat::from_image_format(reader.format()?)?;
+    let (width, height) = reader.into_dimensions().ok()?;
     let animated = match format {
         ImageFormat::Png => png_animated(bytes),
         ImageFormat::Gif => gif_animated(bytes),
@@ -221,8 +237,8 @@ pub(crate) fn probe(bytes: &[u8]) -> Option<ImageInfo> {
     };
     Some(ImageInfo {
         format,
-        width: size.width,
-        height: size.height,
+        width: usize::try_from(width).ok()?,
+        height: usize::try_from(height).ok()?,
         animated,
     })
 }

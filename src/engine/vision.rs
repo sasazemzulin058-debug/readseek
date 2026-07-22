@@ -134,10 +134,11 @@ impl VisionInput<'_> {
     fn dimensions(&self) -> Result<(u32, u32)> {
         match self {
             Self::Encoded(bytes) => {
-                let size =
-                    imagesize::blob_size(bytes).context("read image dimensions for Qwen3-VL")?;
-                let width = u32::try_from(size.width).context("image width exceeds u32")?;
-                let height = u32::try_from(size.height).context("image height exceeds u32")?;
+                let (width, height) = image::ImageReader::new(std::io::Cursor::new(bytes))
+                    .with_guessed_format()
+                    .context("guess image format for Qwen3-VL")?
+                    .into_dimensions()
+                    .context("read image dimensions for Qwen3-VL")?;
                 Ok((width, height))
             }
             Self::Rgb { width, height, .. } => Ok((*width, *height)),

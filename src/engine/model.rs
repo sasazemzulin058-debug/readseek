@@ -167,7 +167,7 @@ fn sha256_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..count]);
     }
-    Ok(hex::encode(hasher.finalize()))
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn valid_cached_file(path: &Path, expected_size: u64, expected_sha256: &str) -> bool {

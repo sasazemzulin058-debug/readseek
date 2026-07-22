@@ -17,29 +17,22 @@ fn dim_to_u32(value: usize) -> u32 {
 /// Lossy `usize -> f32` for image pixel counts and dimensions that may exceed
 /// `u16`. Used only in geometric scale-factor math (`sqrt`, `/beta`) where the
 /// resulting float is consumed approximately, so precision loss is harmless.
+use num_traits::ToPrimitive;
+
 fn count_to_f32(value: usize) -> f32 {
-    value.to_f32().expect("usize always maps to a finite f32")
+    value.to_f32().unwrap_or(0.0)
 }
 
 /// Floor a non-negative `f32` (bounded by the caller) to `usize`. The callers
-/// pass clamped/positive values (coordinates and aligned dimensions); the
-/// checked `to_usize()` rejects NaN/negative/out-of-range instead of silently
-/// saturating like an `as` cast.
+/// pass clamped/positive values (coordinates and aligned dimensions).
 fn floor_to_usize(value: f32) -> usize {
-    value
-        .floor()
-        .to_usize()
-        .expect("coordinate is finite, non-negative and in range")
+    value.floor().to_usize().unwrap_or(0)
 }
 
 /// Ceiling of a non-negative `f32` (bounded by the caller) to `usize`. The
-/// checked `to_usize()` rejects NaN/negative/out-of-range instead of silently
-/// saturating like an `as` cast.
+/// callers pass clamped/positive values (coordinates and aligned dimensions).
 fn ceil_to_usize(value: f32) -> usize {
-    value
-        .ceil()
-        .to_usize()
-        .expect("coordinate is finite, non-negative and in range")
+    value.ceil().to_usize().unwrap_or(0)
 }
 
 use std::path::Path;
@@ -47,7 +40,6 @@ use std::path::Path;
 use anyhow::{Context as _, Result, ensure};
 use image::imageops::FilterType;
 use image::{RgbImage, load_from_memory};
-use num_traits::ToPrimitive;
 use rayon::prelude::*;
 
 use super::gguf::{Gguf, Tensor, TensorType};
