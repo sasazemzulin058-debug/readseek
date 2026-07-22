@@ -1,8 +1,5 @@
 # readseek
 
-<img alt="Screencast of readseek captioning an image" src="screencast.gif" width="1024">
-
-
 `readseek` reads source files and PDFs for scripts, editors, and coding agents.
 It returns compact JSON with stable line/hash anchors, symbol maps, parse
 diagnostics, AST matches, references, and rename plans.
