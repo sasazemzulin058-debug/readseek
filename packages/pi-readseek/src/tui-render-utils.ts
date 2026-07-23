@@ -54,8 +54,12 @@ export function summaryLine(
   return appendExpandHint(`${prefix} ${summary}`, !!options.hidden);
 }
 
-export function isRendererExpanded(options?: { expanded?: boolean }, context?: { expanded?: boolean }): boolean {
-  return context?.expanded ?? options?.expanded ?? false;
+export function isRendererExpanded(
+  options?: { expanded?: boolean },
+  context?: { expanded?: boolean },
+  defaultExpanded = false,
+): boolean {
+  return context?.expanded ?? options?.expanded ?? defaultExpanded;
 }
 
 export interface RenderResultContext {
@@ -73,12 +77,16 @@ export interface RenderResultContext {
  * `options`. Returns the common flags plus the raw context object for callers
  * that need fields beyond the common set (e.g. `lastComponent`).
  */
-export function resolveRenderResultContext(options: any, rest: any[]): RenderResultContext {
+export function resolveRenderResultContext(
+  options: any,
+  rest: any[],
+  defaultExpanded = false,
+): RenderResultContext {
   const context = rest[0] ?? options ?? {};
   return {
     isPartial: context.isPartial ?? options?.isPartial ?? false,
     isError: context.isError ?? false,
-    expanded: isRendererExpanded(options, context),
+    expanded: isRendererExpanded(options, context, defaultExpanded),
     width: context.width ?? options?.width,
     cwd: context.cwd ?? process.cwd(),
     context,

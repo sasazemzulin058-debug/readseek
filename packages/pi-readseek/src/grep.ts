@@ -25,6 +25,7 @@ import type { FileAnchoredCallback } from "./tool-types.js";
 import { optionalIntOrString, registerReadSeekTool } from "./register-tool.js";
 import { searchPathParam } from "./readseek-params.js";
 
+import { resolveReadSeekToolDisplayMode } from "./readseek-settings.js";
 
 const grepSchema = Type.Object({
 	pattern: Type.String({ description: "Regex pattern; use literal for exact text" }),
@@ -553,7 +554,11 @@ export function registerGrepTool(pi: ExtensionAPI, options: GrepToolOptions = {}
 			return new Text(clampLineToWidth(text, context.width), 0, 0);
 		},
 		renderResult(result: any, options: ToolRenderResultOptions, theme: any, ...rest: any[]) {
-			const { isPartial, isError, expanded, cwd, width } = resolveRenderResultContext(options, rest);
+			const { isPartial, isError, expanded, cwd, width } = resolveRenderResultContext(
+				options,
+				rest,
+				resolveReadSeekToolDisplayMode("grep") === "expanded",
+			);
 
 			if (isPartial) return renderPendingResult("pending grep", width, theme);
 

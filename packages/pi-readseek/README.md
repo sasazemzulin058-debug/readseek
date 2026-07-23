@@ -43,6 +43,12 @@ Add an optional `readseek` section to `~/.pi/agent/settings.json` (global) or
     "grep": {
       "maxLines": 2000,
       "maxBytes": 51200
+    },
+    "display": {
+      "read": "compact",
+      "grep": "compact",
+      "edit": "expanded",
+      "write": "expanded"
     }
   }
 }
@@ -58,6 +64,7 @@ Add an optional `readseek` section to `~/.pi/agent/settings.json` (global) or
 - `timeoutMs`: ReadSeek command timeout in milliseconds.
 - `grep.maxLines` and `grep.maxBytes`: output limits for `readSeek_grep`. Values
   above the defaults are clamped.
+- `display`: default display state (`"compact"` or `"expanded"`) per tool for `read`, `grep`, `edit`, and `write`.
 
 ## Licensing
 

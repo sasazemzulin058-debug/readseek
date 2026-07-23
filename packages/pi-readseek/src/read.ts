@@ -27,7 +27,7 @@ import { buildLocalBundle } from "./read-local-bundle.js";
 import { coerceObviousBase10Int } from "./coerce-obvious-int.js";
 import { readSeekRead, readSeekDetect, readSeekImage, readSeekPdf, readSeekPreparedImage, type ReadSeekDetection, type ReadSeekPdfOutput } from "./readseek-client.js";
 import { formatReadCallText, formatReadResultText } from "./read-render-helpers.js";
-import { resolveReadSeekImageMode } from "./readseek-settings.js";
+import { resolveReadSeekImageMode, resolveReadSeekToolDisplayMode } from "./readseek-settings.js";
 import { clampLineToWidth, clampLinesToWidth, linkToolPath, renderPendingResult, renderToolLabel, resolveRenderResultContext, summaryLine } from "./tui-render-utils.js";
 import { renderReadSourceForDisplayCached } from "./tui-source-render.js";
 import type { FileAnchoredCallback } from "./tool-types.js";
@@ -621,7 +621,11 @@ export function registerReadTool(pi: ExtensionAPI, options: ReadToolOptions = {}
 			return new Text(clampLineToWidth(text, context.width), 0, 0);
 		},
 		renderResult(result: any, options: ToolRenderResultOptions, theme: any, ...rest: any[]) {
-			const { isPartial, isError, expanded, width, context } = resolveRenderResultContext(options, rest);
+			const { isPartial, isError, expanded, width, context } = resolveRenderResultContext(
+				options,
+				rest,
+				resolveReadSeekToolDisplayMode("read") === "expanded",
+			);
 			if (isPartial) return renderPendingResult("pending read", width, theme);
 
 			const content = result.content?.[0];

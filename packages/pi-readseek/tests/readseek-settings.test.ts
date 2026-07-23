@@ -20,6 +20,7 @@ const {
 	resolveReadSeekJsonSettings,
 	resolveReadSeekImageMode,
 	resolveReadSeekSyntaxValidation,
+	resolveReadSeekToolDisplayMode,
 } = await import("../src/readseek-settings.js");
 
 describe("readseek settings", () => {
@@ -130,5 +131,37 @@ describe("readseek settings", () => {
 
 		await rm(path.join(tempHome, ".pi", "agent", "settings.json"));
 		expect(resolveReadSeekImageMode()).toBe("auto");
+	});
+
+	it("provides default display modes per tool", () => {
+		expect(resolveReadSeekToolDisplayMode("read")).toBe("compact");
+		expect(resolveReadSeekToolDisplayMode("grep")).toBe("compact");
+		expect(resolveReadSeekToolDisplayMode("edit")).toBe("expanded");
+		expect(resolveReadSeekToolDisplayMode("write")).toBe("expanded");
+	});
+
+	it("parses display mode settings and allows overrides", async () => {
+		await writeGlobal({ readseek: { display: { read: "expanded", edit: "compact" } } });
+		expect(resolveReadSeekToolDisplayMode("read")).toBe("expanded");
+		expect(resolveReadSeekToolDisplayMode("grep")).toBe("compact");
+		expect(resolveReadSeekToolDisplayMode("edit")).toBe("compact");
+		expect(resolveReadSeekToolDisplayMode("write")).toBe("expanded");
+	});
+
+	it("merges display mode settings from project overrides", async () => {
+		await writeGlobal({ readseek: { display: { read: "expanded", grep: "expanded" } } });
+		await writeProject({ readseek: { display: { read: "compact" } } });
+		expect(resolveReadSeekToolDisplayMode("read")).toBe("compact");
+		expect(resolveReadSeekToolDisplayMode("grep")).toBe("expanded");
+	});
+
+	it("warns on unknown and invalid display mode settings", async () => {
+		await writeGlobal({ readseek: { display: { read: "invalid", unknownTool: "compact" } } });
+		const { warnings } = resolveReadSeekJsonSettings();
+		expect(warnings.map((w) => w.path)).toEqual([
+			"readseek.display.unknownTool",
+			"readseek.display.read",
+		]);
+		expect(resolveReadSeekToolDisplayMode("read")).toBe("compact");
 	});
 });

@@ -25,6 +25,7 @@ import { replaceSymbol } from "./replace-symbol.js";
 import { buildEditPreviewKey, buildPendingEditPreviewData, resolvePendingDiffPreview, type PendingDiffPreviewResult } from "./pending-diff-preview.js";
 import { buildDiffData, type DiffBlockRange } from "./diff-data.js";
 import { clampLineToWidth, clampLinesToWidth, linkToolPath, renderPendingResult, resolveRenderResultContext, summaryLine } from "./tui-render-utils.js";
+import { resolveReadSeekToolDisplayMode } from "./readseek-settings.js";
 import { upsertDiffComponent, upsertTextComponent } from "./tui-diff-component.js";
 import type { FileMutatedCallback, FreshAnchorsPredicate } from "./tool-types.js";
 import { filePathParam, registerReadSeekTool } from "./register-tool.js";
@@ -630,7 +631,11 @@ export function registerEditTool(pi: ExtensionAPI, options: EditToolOptions = {}
 			return upsertTextComponent(context.lastComponent, clampLinesToWidth(preview2.lines, context.width).join("\n"));
 		},
 			renderResult(result: any, options: ToolRenderResultOptions, theme: any, ...rest: any[]) {
-			const { isPartial, isError, expanded, width, context } = resolveRenderResultContext(options, rest);
+			const { isPartial, isError, expanded, width, context } = resolveRenderResultContext(
+				options,
+				rest,
+				resolveReadSeekToolDisplayMode("edit") === "expanded",
+			);
 
 			if (isPartial) {
 				return renderPendingResult("pending edit", width, theme);

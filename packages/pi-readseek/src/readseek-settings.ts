@@ -4,6 +4,13 @@ import { join } from "node:path";
 
 export type ReadSeekImageAnalysisMode = "on" | "off" | "auto";
 export type ReadSeekSyntaxValidationMode = "warn" | "block" | "off";
+export type ReadSeekDisplayMode = "compact" | "expanded";
+export interface ReadSeekDisplaySettings {
+  read?: ReadSeekDisplayMode;
+  grep?: ReadSeekDisplayMode;
+  edit?: ReadSeekDisplayMode;
+  write?: ReadSeekDisplayMode;
+}
 interface ReadSeekGrepSettings {
   maxLines?: number;
   maxBytes?: number;
@@ -24,6 +31,7 @@ interface ReadSeekJsonSettings {
   syntaxValidation?: ReadSeekSyntaxValidationMode;
   timeoutMs?: number;
   grep?: ReadSeekGrepSettings;
+  display?: ReadSeekDisplaySettings;
 }
 
 export interface ReadSeekSettingsWarning {
@@ -37,8 +45,16 @@ export interface ReadSeekSettingsResult {
   warnings: ReadSeekSettingsWarning[];
 }
 
-const READSEEK_KEYS = ["replacedTools", "imageMode", "syntaxValidation", "timeoutMs", "grep"];
+const READSEEK_KEYS = ["replacedTools", "imageMode", "syntaxValidation", "timeoutMs", "grep", "display"];
 const READSEEK_GREP_KEYS = ["maxLines", "maxBytes"];
+const READSEEK_DISPLAY_KEYS = ["read", "grep", "edit", "write"];
+
+const DEFAULT_DISPLAY_MODES: Record<ReadSeekReplacementTool, ReadSeekDisplayMode> = {
+  read: "compact",
+  grep: "compact",
+  edit: "expanded",
+  write: "expanded",
+};
 
 function globalSettingsPath(): string {
   return join(homedir(), ".pi/agent/settings.json");
@@ -133,6 +149,31 @@ function readReplacedTools(
   });
   return tools;
 }
+function readDisplaySettings(
+  raw: Record<string, unknown>,
+  source: string,
+  warnings: ReadSeekSettingsWarning[],
+): ReadSeekDisplaySettings | undefined {
+  if (!("display" in raw)) return undefined;
+  if (!isRecord(raw.display)) {
+    warnings.push(invalid(source, "readseek.display"));
+    return undefined;
+  }
+  warnUnknownKeys(raw.display, READSEEK_DISPLAY_KEYS, "readseek.display", source, warnings);
+  const display: ReadSeekDisplaySettings = {};
+  for (const tool of READSEEK_DISPLAY_KEYS as Array<keyof ReadSeekDisplaySettings>) {
+    const mode = readEnum(
+      raw.display,
+      tool,
+      ["compact", "expanded"] as const,
+      `readseek.display.${tool}`,
+      source,
+      warnings,
+    );
+    if (mode !== undefined) display[tool] = mode;
+  }
+  return Object.keys(display).length > 0 ? display : undefined;
+}
 
 function validateSettings(raw: unknown, source: string): ReadSeekSettingsResult {
   const settings: ReadSeekJsonSettings = {};
@@ -192,6 +233,8 @@ function validateSettings(raw: unknown, source: string): ReadSeekSettingsResult 
       warnings.push(invalid(source, "readseek.grep"));
     }
   }
+  const display = readDisplaySettings(section, source, warnings);
+  if (display !== undefined) settings.display = display;
 
   return { settings, warnings };
 }
@@ -238,6 +281,8 @@ function mergeSettings(base: ReadSeekJsonSettings, override: ReadSeekJsonSetting
   const settings: ReadSeekJsonSettings = { ...base, ...override };
   const grep = { ...(base.grep ?? {}), ...(override.grep ?? {}) };
   if (Object.keys(grep).length > 0) settings.grep = grep;
+  const display = { ...(base.display ?? {}), ...(override.display ?? {}) };
+  if (Object.keys(display).length > 0) settings.display = display;
   return settings;
 }
 
@@ -260,4 +305,7 @@ export function resolveReadSeekSyntaxValidation(): ReadSeekSyntaxValidationMode 
 
 export function resolveReadSeekTimeoutMs(): number | undefined {
   return resolveReadSeekJsonSettings().settings.timeoutMs;
+}
+export function resolveReadSeekToolDisplayMode(tool: ReadSeekReplacementTool): ReadSeekDisplayMode {
+  return resolveReadSeekJsonSettings().settings.display?.[tool] ?? DEFAULT_DISPLAY_MODES[tool];
 }

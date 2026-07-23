@@ -18,6 +18,7 @@ import { buildPendingWritePreviewData, buildWritePreviewKey, resolvePendingDiffP
 import { generateCompactOrFullDiff, normalizeToLF, hasBareCarriageReturn } from "./edit-diff.js";
 import { buildDiffData, type DiffData } from "./diff-data.js";
 import { clampLineToWidth, clampLinesToWidth, linkToolPath, renderErrorResult, renderPendingResult, renderToolLabel, resolveRenderResultContext, summaryLine } from "./tui-render-utils.js";
+import { resolveReadSeekToolDisplayMode } from "./readseek-settings.js";
 import { upsertDiffComponent, upsertTextComponent } from "./tui-diff-component.js";
 import type { FileAnchoredCallback } from "./tool-types.js";
 import { filePathParam, mapParam, registerReadSeekTool } from "./register-tool.js";
@@ -325,7 +326,11 @@ export function registerWriteTool(pi: ExtensionAPI, options: WriteToolOptions = 
       return upsertTextComponent(context.lastComponent, clampLinesToWidth(parts.lines, context.width).join("\n"));
     },
     renderResult(result: any, options: ToolRenderResultOptions, theme: any, ...rest: any[]) {
-      const { isPartial, expanded, width, context } = resolveRenderResultContext(options, rest);
+      const { isPartial, expanded, width, context } = resolveRenderResultContext(
+        options,
+        rest,
+        resolveReadSeekToolDisplayMode("write") === "expanded",
+      );
       if (isPartial) return renderPendingResult("pending write", width, theme);
       const details = result.details ?? {};
       const output = result.content?.[0]?.type === "text" ? result.content[0].text : "";
