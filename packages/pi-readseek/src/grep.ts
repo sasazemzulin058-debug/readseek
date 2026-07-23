@@ -19,7 +19,8 @@ import { resolveToCwd } from "./path-utils.js";
 import { throwIfAborted } from "./runtime.js";
 import { formatGrepCallText, formatGrepResultText, GREP_TRUNCATION_THRESHOLD } from "./grep-render-helpers.js";
 import { coerceObviousBase10Int } from "./coerce-obvious-int.js";
-import { clampLineToWidth, clampLinesToWidth, linkedPathLine, linkToolPath, renderErrorResult, renderPendingResult, renderToolLabel, resolveRenderResultContext, summaryLine } from "./tui-render-utils.js";
+import { clampLineToWidth, clampLinesToWidth, linkToolPath, renderErrorResult, renderPendingResult, renderToolLabel, resolveRenderResultContext, summaryLine } from "./tui-render-utils.js";
+import { renderGrepSourceForDisplay } from "./tui-source-render.js";
 import type { FileAnchoredCallback } from "./tool-types.js";
 import { optionalIntOrString, registerReadSeekTool } from "./register-tool.js";
 import { searchPathParam } from "./readseek-params.js";
@@ -565,7 +566,7 @@ export function registerGrepTool(pi: ExtensionAPI, options: GrepToolOptions = {}
 				tool: "grep";
 				summary: boolean;
 				totalMatches: number;
-				records: Array<{ path: string; kind: string }>;
+				records: Array<{ path: string; anchor: string; kind: string }>;
 			} | undefined;
 
 			const hasBinaryWarning = textContent.includes("appears to be a binary file");
@@ -592,14 +593,9 @@ export function registerGrepTool(pi: ExtensionAPI, options: GrepToolOptions = {}
 				style: "success",
 			});
 			for (const badge of info.badges) text += theme.fg(badge.startsWith("⚠") ? "warning" : "dim", `  ${badge}`);
-			if (expanded && readSeekValue?.records) {
-				const fileCounts = new Map<string, number>();
-				for (const r of readSeekValue.records) if (r.path && r.kind === "match") fileCounts.set(r.path, (fileCounts.get(r.path) ?? 0) + 1);
-				for (const [filePath, count] of [...fileCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20)) {
-					const display = path.relative(cwd, filePath) || filePath;
-					text += `\n${linkedPathLine(theme, filePath, display, cwd, ` (${count})`, width)}`;
-				}
-				if (fileCounts.size > 20) text += "\n" + theme.fg("muted", `  … and ${fileCounts.size - 20} more files`);
+			if (expanded && textContent && readSeekValue?.records) {
+				const anchors = new Set(readSeekValue.records.map((record) => record.anchor));
+				text += "\n" + renderGrepSourceForDisplay(textContent, anchors, (displayPath) => linkToolPath(theme.fg("dim", displayPath), displayPath, cwd));
 			}
 			return new Text(clampLinesToWidth(text.split("\n"), width).join("\n"), 0, 0);
 		},

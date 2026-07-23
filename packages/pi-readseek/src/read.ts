@@ -28,7 +28,8 @@ import { coerceObviousBase10Int } from "./coerce-obvious-int.js";
 import { readSeekRead, readSeekDetect, readSeekImage, readSeekPdf, readSeekPreparedImage, type ReadSeekDetection, type ReadSeekPdfOutput } from "./readseek-client.js";
 import { formatReadCallText, formatReadResultText } from "./read-render-helpers.js";
 import { resolveReadSeekImageMode } from "./readseek-settings.js";
-import { clampLineToWidth, clampLinesToWidth, linkToolPath, renderPendingResult, renderToolLabel, resolveRenderResultContext, summaryLine, wrapReadHashlinesForWidthCached } from "./tui-render-utils.js";
+import { clampLineToWidth, clampLinesToWidth, linkToolPath, renderPendingResult, renderToolLabel, resolveRenderResultContext, summaryLine } from "./tui-render-utils.js";
+import { renderReadSourceForDisplayCached } from "./tui-source-render.js";
 import type { FileAnchoredCallback } from "./tool-types.js";
 import { filePathParam, mapParam, optionalIntOrString, registerReadSeekTool } from "./register-tool.js";
 
@@ -620,7 +621,7 @@ export function registerReadTool(pi: ExtensionAPI, options: ReadToolOptions = {}
 			return new Text(clampLineToWidth(text, context.width), 0, 0);
 		},
 		renderResult(result: any, options: ToolRenderResultOptions, theme: any, ...rest: any[]) {
-			const { isPartial, isError, expanded, width } = resolveRenderResultContext(options, rest);
+			const { isPartial, isError, expanded, width, context } = resolveRenderResultContext(options, rest);
 			if (isPartial) return renderPendingResult("pending read", width, theme);
 
 			const content = result.content?.[0];
@@ -631,7 +632,16 @@ export function registerReadTool(pi: ExtensionAPI, options: ReadToolOptions = {}
 				return new Text(clampLinesToWidth([summaryLine(errorText, { theme, style: "error" })], width).join("\n"), 0, 0);
 			}
 
-			const readSeekValue = (result.details as any)?.readSeekValue as { range: { startLine: number; endLine: number; totalLines: number }; truncation: any; symbol: any; map: any; warnings: ReadSeekWarning[] } | undefined;
+			const readSeekValue = (result.details as any)?.readSeekValue as {
+				path?: string;
+				range: { startLine: number; endLine: number; totalLines: number };
+				truncation: any;
+				symbol: any;
+				map: any;
+				warnings: ReadSeekWarning[];
+				lines?: Array<{ anchor: string }>;
+				bundle?: { localSupport?: Array<{ lineAnchors: string[] }> };
+			} | undefined;
 			if (!readSeekValue) {
 				const lines = textContent.split("\n").filter(Boolean).length || textContent.split("\n").length;
 				return new Text(
@@ -653,7 +663,14 @@ export function registerReadTool(pi: ExtensionAPI, options: ReadToolOptions = {}
 			for (const badge of info.badges) summaryParts.push(badge);
 			const summary = summaryParts.join(" • ");
 			let text = summaryLine(summary, { hidden: !!textContent && !expanded, theme, style: "success" });
-			if (expanded && textContent) text += "\n" + wrapReadHashlinesForWidthCached(content, textContent, width);
+			if (expanded && textContent) {
+				const anchors = new Set(readSeekValue.lines?.map((line) => line.anchor) ?? []);
+				for (const item of readSeekValue.bundle?.localSupport ?? []) {
+					for (const anchor of item.lineAnchors) anchors.add(anchor);
+				}
+				const sourcePath = readSeekValue.path ?? context.args?.path ?? "";
+				text += "\n" + renderReadSourceForDisplayCached(content, textContent, sourcePath, anchors, width, theme);
+			}
 			return new Text(clampLinesToWidth(text.split("\n"), width).join("\n"), 0, 0);
 		},
 	});

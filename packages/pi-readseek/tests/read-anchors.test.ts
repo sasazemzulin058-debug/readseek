@@ -97,13 +97,18 @@ describe("executeRead anchor tracking", () => {
 			});
 			const onSuccessfulRead = vi.fn();
 
-			await executeRead({
+			const result = await executeRead({
 				toolCallId: "test",
 				params: { path: "file.txt" },
 				signal: undefined,
 				onUpdate: undefined,
 				cwd,
 				onSuccessfulRead,
+			});
+
+			expect(result.content[0]).toMatchObject({
+				type: "text",
+				text: expect.stringContaining("1:aaa|hello\n2:bbb|world"),
 			});
 
 			expect(onSuccessfulRead).toHaveBeenCalledWith(filePath);
