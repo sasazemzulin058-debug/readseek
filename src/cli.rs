@@ -4,9 +4,9 @@
 use crate::engine::flags::GitFlags;
 use crate::engine::lang::{LANGUAGE_SPECS, Language};
 use crate::engine::output::ImageMode;
-use crate::engine::target::{Target, TargetAddress};
+use crate::engine::target::Target;
 use crate::engine::vision::VisionLevel;
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use argh::FromArgs;
 use std::path::PathBuf;
 
@@ -360,57 +360,7 @@ pub(crate) fn parse_language(value: &str) -> std::result::Result<Language, Strin
         .ok_or_else(|| format!("unknown language `{value}`"))
 }
 pub(crate) fn parse_target(value: &str, name_mode: bool) -> Result<Target> {
-    if value.is_empty() {
-        bail!("target must not be empty");
-    }
-
-    let (read_stdin, rest) = match value.strip_prefix("stdin:") {
-        Some(rest) => (true, rest),
-        None => (false, value),
-    };
-
-    let (path, address) = if rest.is_empty() {
-        (PathBuf::new(), None)
-    } else if let Some((path, suffix)) = rest.rsplit_once(':') {
-        let address = if suffix.is_empty() {
-            None
-        } else if name_mode {
-            Some(TargetAddress::Name(suffix.to_owned()))
-        } else if suffix.chars().all(|ch| ch.is_ascii_digit()) {
-            let line = suffix
-                .parse::<usize>()
-                .with_context(|| format!("invalid target line: {suffix}"))?;
-            if line == 0 {
-                bail!("target line must be greater than zero");
-            }
-            Some(TargetAddress::Line(line))
-        } else if is_line_hash(suffix) {
-            Some(TargetAddress::Hash(suffix.to_ascii_lowercase()))
-        } else {
-            None
-        };
-        if address.is_some() {
-            (PathBuf::from(path), address)
-        } else {
-            (PathBuf::from(rest), None)
-        }
-    } else {
-        (PathBuf::from(rest), None)
-    };
-
-    if !read_stdin && path.as_os_str().is_empty() {
-        bail!("target path must not be empty");
-    }
-
-    Ok(Target {
-        path,
-        address,
-        read_stdin,
-    })
-}
-
-fn is_line_hash(value: &str) -> bool {
-    value.len() == 3 && value.chars().all(|ch| ch.is_ascii_hexdigit())
+    Target::parse(value, name_mode)
 }
 
 /// Comma-list of Git search scopes requested via `--git`.

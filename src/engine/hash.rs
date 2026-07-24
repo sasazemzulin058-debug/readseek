@@ -25,6 +25,11 @@ impl LineHash {
     pub(crate) fn as_u16(self) -> u16 {
         u16::from(self)
     }
+
+    /// Check if a string slice is a valid 3-character hex line hash.
+    pub(crate) fn is_valid_str(value: &str) -> bool {
+        value.len() == 3 && value.chars().all(|ch| ch.is_ascii_hexdigit())
+    }
 }
 
 impl From<LineHash> for u16 {
