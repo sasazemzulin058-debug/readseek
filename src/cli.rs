@@ -121,7 +121,7 @@ pub(crate) struct ViewCommand {
 
     /// node kind to include
     #[argh(option)]
-    pub(crate) kind: Option<crate::engine::document::NodeKind>,
+    pub(crate) kind: Option<String>,
 
     /// maximum node depth to include
     #[argh(option)]

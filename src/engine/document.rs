@@ -5,27 +5,22 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
+use strum_macros::{AsRefStr, Display, EnumString};
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, Deserialize, Display, EnumString, AsRefStr, Serialize)]
+#[strum(serialize_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum DocumentFormat {
     Pdf,
 }
 
 impl DocumentFormat {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Pdf => "pdf",
-        }
-    }
-
     pub(crate) fn parse(value: &str) -> Result<Self> {
-        match value {
-            "pdf" => Ok(Self::Pdf),
-            _ => bail!("unsupported indexed document format: {value}"),
-        }
+        value
+            .parse()
+            .map_err(|_| anyhow!("unsupported indexed document format: {value}"))
     }
 }
 
@@ -50,7 +45,10 @@ impl Document {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Display, EnumString, AsRefStr, Eq, PartialEq, Serialize,
+)]
+#[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NodeKind {
     Artifact,
@@ -66,41 +64,10 @@ pub(crate) enum NodeKind {
 }
 
 impl NodeKind {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Artifact => "artifact",
-            Self::Footer => "footer",
-            Self::Header => "header",
-            Self::Heading => "heading",
-            Self::MarginalLabel => "marginal_label",
-            Self::Page => "page",
-            Self::PageNumber => "page_number",
-            Self::Paragraph => "paragraph",
-            Self::Section => "section",
-            Self::StructuralSection => "structural_section",
-        }
-    }
-
     pub(crate) fn parse(value: &str) -> Result<Self> {
-        match value {
-            "artifact" => Ok(Self::Artifact),
-            "footer" => Ok(Self::Footer),
-            "header" => Ok(Self::Header),
-            "heading" => Ok(Self::Heading),
-            "marginal_label" => Ok(Self::MarginalLabel),
-            "page" => Ok(Self::Page),
-            "page_number" => Ok(Self::PageNumber),
-            "paragraph" => Ok(Self::Paragraph),
-            "section" => Ok(Self::Section),
-            "structural_section" => Ok(Self::StructuralSection),
-            _ => bail!("unsupported indexed node kind: {value}"),
-        }
-    }
-}
-
-impl argh::FromArgValue for NodeKind {
-    fn from_arg_value(value: &str) -> std::result::Result<Self, String> {
-        Self::parse(value).map_err(|error| error.to_string())
+        value
+            .parse()
+            .map_err(|_| anyhow!("unsupported indexed node kind: {value}"))
     }
 }
 

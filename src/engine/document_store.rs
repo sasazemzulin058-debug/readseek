@@ -267,7 +267,7 @@ pub(crate) fn store(readseek_dir: &Path, document: &Document) -> Result<()> {
     let pages = i64::try_from(document.pages).context("document page count is too large")?;
     transaction.execute(
         "INSERT INTO document (id, format, pages) VALUES (?1, ?2, ?3)",
-        params![document.id, document.format.as_str(), pages],
+        params![document.id, document.format.as_ref(), pages],
     )?;
     for (position, node) in document.nodes.iter().enumerate() {
         let position = i64::try_from(position).context("too many document nodes")?;
@@ -297,7 +297,7 @@ pub(crate) fn store(readseek_dir: &Path, document: &Document) -> Result<()> {
                 node.id,
                 node.parent_id,
                 position,
-                node.kind.as_str(),
+                node.kind.as_ref(),
                 node.title,
                 node.text,
                 page,

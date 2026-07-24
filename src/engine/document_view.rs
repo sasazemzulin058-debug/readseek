@@ -191,7 +191,7 @@ pub(crate) fn render(document: &Document) -> String {
     let mut output = format!(
         "{} ({}, {} {page_label})\n",
         document.title,
-        document.format.as_str().to_uppercase(),
+        document.format.as_ref().to_uppercase(),
         document.pages
     );
     if document.nodes.is_empty() {
@@ -229,7 +229,7 @@ pub(crate) fn render(document: &Document) -> String {
             "{}[{}] {}{level}{separator}{content}{page}",
             "  ".repeat(depth),
             node.id,
-            node.kind.as_str()
+            node.kind.as_ref()
         )
         .unwrap();
     }

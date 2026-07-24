@@ -9,6 +9,7 @@ use tree_sitter::Parser;
 
 use crate::cli;
 use crate::cli::GitSelection;
+use crate::engine::document::NodeKind;
 use crate::engine::flags::GitFlags;
 use crate::engine::lang::Language;
 use crate::engine::output::SearchOutput;
@@ -122,6 +123,12 @@ fn parse_cli() -> Result<cli::Cli> {
                     cmd,
                     "--vision-level cannot be combined with --end, --limit, or --language",
                 );
+            }
+            if let Some(cli::Command::View(view)) = &cli.command
+                && let Some(kind) = &view.kind
+                && let Err(error) = NodeKind::parse(kind)
+            {
+                usage_error(cmd, &error.to_string());
             }
             Ok(cli)
         }
@@ -375,7 +382,7 @@ impl cli::ViewCommand {
         let selection = document_view::Selection {
             node: self.node.as_deref(),
             page: self.page,
-            kind: self.kind,
+            kind: self.kind.as_deref().map(NodeKind::parse).transpose()?,
             depth: self.depth,
             outline: self.outline,
             overview: self.node.is_none()
