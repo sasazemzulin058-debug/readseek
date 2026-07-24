@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
+use strum_macros::{AsRefStr, Display};
 
 use crate::engine::hash::LineHash;
 use crate::engine::image::{ImageInfo, PreparedImage};
@@ -18,15 +19,18 @@ use crate::engine::source::{
 };
 use crate::engine::target::{Target, TargetAddress};
 use crate::engine::vision::{Analysis, DetectedObject};
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Display, AsRefStr)]
+#[strum(serialize_all = "lowercase")]
 pub(crate) enum Format {
     #[default]
     Json,
     Plain,
 }
 
-impl argh::FromArgValue for Format {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
+impl FromStr for Format {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
         match value {
             "json" => Ok(Self::Json),
             "plain" => Ok(Self::Plain),
