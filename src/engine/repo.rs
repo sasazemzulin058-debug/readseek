@@ -350,8 +350,8 @@ fn parse_sym_entry(sym_bytes: &[u8], strtab: &[u8], i: usize, path: &Path) -> Re
         qualified_name: qualified_name.to_owned(),
         start_line: entry.start_line.get() as usize,
         end_line: entry.end_line.get() as usize,
-        start_hash: LineHash::new(entry.start_hash.get())?,
-        end_hash: LineHash::new(entry.end_hash.get())?,
+        start_hash: LineHash::try_from(entry.start_hash.get())?,
+        end_hash: LineHash::try_from(entry.end_hash.get())?,
         start_byte: entry.start_byte.get() as usize,
         end_byte: entry.end_byte.get() as usize,
         name_byte: entry.name_byte.get() as usize,
@@ -424,8 +424,8 @@ pub(crate) fn store_map(
             kind_len: U16::new(kind_len),
             name_len: U16::new(name_len),
             qname_len: U16::new(qname_len),
-            start_hash: U16::new(symbol.start_hash.as_u16()),
-            end_hash: U16::new(symbol.end_hash.as_u16()),
+            start_hash: U16::new(u16::from(symbol.start_hash)),
+            end_hash: U16::new(u16::from(symbol.end_hash)),
         });
     }
 

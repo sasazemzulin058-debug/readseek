@@ -11,21 +11,36 @@ pub(crate) const HASHLINE_MODULUS: u32 = 0x1000;
 
 /// A locality-preserving line hash: a value in `[0, HASHLINE_MODULUS)` rendered
 /// as a three-digit hex string.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct LineHash(u16);
 
 impl LineHash {
     /// Wrap a raw value, rejecting anything at or above [`HASHLINE_MODULUS`].
     pub(crate) fn new(value: u16) -> Result<Self> {
+        Self::try_from(value)
+    }
+
+    /// The raw value, always in `[0, HASHLINE_MODULUS)`.
+    #[allow(dead_code)]
+    pub(crate) fn as_u16(self) -> u16 {
+        u16::from(self)
+    }
+}
+
+impl From<LineHash> for u16 {
+    fn from(hash: LineHash) -> Self {
+        hash.0
+    }
+}
+
+impl TryFrom<u16> for LineHash {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u16) -> Result<Self> {
         if u32::from(value) >= HASHLINE_MODULUS {
             bail!("line hash {value:#x} is out of range");
         }
         Ok(Self(value))
-    }
-
-    /// The raw value, always in `[0, HASHLINE_MODULUS)`.
-    pub(crate) fn as_u16(self) -> u16 {
-        self.0
     }
 }
 
