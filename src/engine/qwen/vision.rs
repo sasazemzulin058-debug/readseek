@@ -66,6 +66,7 @@ const LAYER_NORM_EPSILON: f32 = 1.0e-6;
 const ATTENTION_SCALE: f32 = 0.125;
 const ROPE_THETA: f32 = 10_000.0;
 const ATTENTION_KEY_TILE: usize = 64;
+const CACHE_LINE_SIZE: usize = 64;
 
 /// Input accepted by [`VisionModel::encode_input`].
 #[derive(Clone, Copy)]
@@ -112,6 +113,76 @@ struct TokenCluster {
     partner: Option<usize>,
 }
 
+/// Cache-line-aligned planar RGB bitmap with a power-of-two row stride.
+///
+/// `width` and `height` are the logical resized dimensions used by the model.
+/// Width padding is storage-only, so it does not add vision tokens; height is
+/// never padded.
+struct Bitmap {
+    storage: Vec<u8>,
+    pixel_offset: usize,
+    pixel_len: usize,
+    width: usize,
+    height: usize,
+    width_shift: u32,
+    plane_len: usize,
+}
+
+impl Bitmap {
+    fn from_image(image: RgbImage) -> Result<Self> {
+        let width = image.width() as usize;
+        let height = image.height() as usize;
+        let padded_width = width
+            .checked_next_power_of_two()
+            .context("padded bitmap width overflow")?;
+        let plane_len = padded_width
+            .checked_mul(height)
+            .context("padded bitmap plane size overflow")?;
+        let pixel_len = plane_len
+            .checked_mul(CHANNELS)
+            .context("padded bitmap size overflow")?;
+        let storage_len = pixel_len
+            .checked_add(CACHE_LINE_SIZE - 1)
+            .context("aligned bitmap allocation size overflow")?;
+        let mut storage = vec![0; storage_len];
+        let pixel_offset = storage.as_ptr().align_offset(CACHE_LINE_SIZE);
+        ensure!(
+            pixel_offset < CACHE_LINE_SIZE,
+            "could not align bitmap storage to {CACHE_LINE_SIZE} bytes"
+        );
+
+        let source_stride = width
+            .checked_mul(CHANNELS)
+            .context("bitmap source stride overflow")?;
+        let source = image.into_raw();
+        let pixels = &mut storage[pixel_offset..pixel_offset + pixel_len];
+        let width_shift = padded_width.trailing_zeros();
+        for (y, source) in source.chunks_exact(source_stride).enumerate() {
+            let destination_row = y << width_shift;
+            for (x, source) in source.chunks_exact(CHANNELS).enumerate() {
+                let destination = destination_row + x;
+                pixels[destination] = source[0];
+                pixels[plane_len + destination] = source[1];
+                pixels[plane_len * 2 + destination] = source[2];
+            }
+        }
+
+        Ok(Self {
+            storage,
+            pixel_offset,
+            pixel_len,
+            width,
+            height,
+            width_shift,
+            plane_len,
+        })
+    }
+
+    fn pixels(&self) -> &[u8] {
+        &self.storage[self.pixel_offset..self.pixel_offset + self.pixel_len]
+    }
+}
+
 impl VisionModel {
     /// Load and fully validate the fixed Qwen3-VL-2B mmproj GGUF.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
@@ -134,13 +205,15 @@ impl VisionModel {
         );
         let image = decode_input(input)?;
         let resized = smart_resize(image, image_max_tokens)?;
-        let patch_width = resized.width() as usize / PATCH_SIZE;
-        let patch_height = resized.height() as usize / PATCH_SIZE;
+        let bitmap = Bitmap::from_image(resized)?;
+        let patch_width = bitmap.width / PATCH_SIZE;
+        let patch_height = bitmap.height / PATCH_SIZE;
         let token_count = patch_width
             .checked_mul(patch_height)
             .context("vision patch count overflow")?;
 
-        let mut hidden = self.patch_embeddings(&resized, patch_width, patch_height)?;
+        let mut hidden = self.patch_embeddings(&bitmap, patch_width, patch_height)?;
+        drop(bitmap);
         let positions = self.position_embeddings(patch_width, patch_height)?;
         vector_add(&mut hidden, &positions)?;
 
@@ -332,7 +405,7 @@ impl VisionModel {
 
     fn patch_embeddings(
         &self,
-        image: &RgbImage,
+        bitmap: &Bitmap,
         patch_width: usize,
         patch_height: usize,
     ) -> Result<Vec<f32>> {
@@ -340,8 +413,7 @@ impl VisionModel {
         let second = f32_values(&self.gguf, "v.patch_embd.weight.1")?;
         let bias = f32_values(&self.gguf, "v.patch_embd.bias")?;
         let token_count = patch_width * patch_height;
-        let pixels = image.as_raw();
-        let image_width = image.width() as usize;
+        let pixels = bitmap.pixels();
         let mut output = vec![0.0; token_count * EMBEDDING_WIDTH];
 
         output
@@ -351,16 +423,19 @@ impl VisionModel {
                 || vec![0.0; PATCH_VALUES],
                 |patch, (token, row)| {
                     let (patch_x, patch_y) = grouped_patch_coordinates(token, patch_width);
+                    let patch_x = patch_x * PATCH_SIZE;
+                    let patch_y = patch_y * PATCH_SIZE;
                     for channel in 0..CHANNELS {
+                        let channel_start = channel * bitmap.plane_len;
                         for y in 0..PATCH_SIZE {
-                            for x in 0..PATCH_SIZE {
-                                let source = ((patch_y * PATCH_SIZE + y) * image_width
-                                    + patch_x * PATCH_SIZE
-                                    + x)
-                                    * CHANNELS
-                                    + channel;
-                                let destination = x + PATCH_SIZE * (y + PATCH_SIZE * channel);
-                                patch[destination] = f32::from(pixels[source]) / 127.5 - 1.0;
+                            let source_start =
+                                channel_start + ((patch_y + y) << bitmap.width_shift) + patch_x;
+                            let destination_start = PATCH_SIZE * (y + PATCH_SIZE * channel);
+                            let source = &pixels[source_start..source_start + PATCH_SIZE];
+                            let destination =
+                                &mut patch[destination_start..destination_start + PATCH_SIZE];
+                            for (source, destination) in source.iter().zip(destination) {
+                                *destination = f32::from(*source) / 127.5 - 1.0;
                             }
                         }
                     }
@@ -565,6 +640,8 @@ fn smart_resize(image: RgbImage, image_max_tokens: usize) -> Result<RgbImage> {
         target_height = ceil_to_multiple(count_to_f32(height) * beta, ALIGN_SIZE);
         target_width = ceil_to_multiple(count_to_f32(width) * beta, ALIGN_SIZE);
     }
+    let (target_width, target_height) =
+        adjust_width_to_power_of_two(target_width, target_height, min_pixels)?;
     ensure!(
         target_width.is_multiple_of(ALIGN_SIZE) && target_height.is_multiple_of(ALIGN_SIZE),
         "smart resize dimensions are not aligned"
@@ -580,6 +657,49 @@ fn smart_resize(image: RgbImage, image_max_tokens: usize) -> Result<RgbImage> {
         target_height,
         FilterType::Triangle,
     ))
+}
+
+/// Pad a nearer/equidistant next power in [`Bitmap`], but scale the image when
+/// the previous width power is strictly nearer. Height follows that scale to
+/// preserve the aspect ratio and remains aligned only to the patch grid.
+fn adjust_width_to_power_of_two(
+    width: usize,
+    height: usize,
+    min_pixels: usize,
+) -> Result<(usize, usize)> {
+    if width.is_power_of_two() {
+        return Ok((width, height));
+    }
+
+    let next_width = width
+        .checked_next_power_of_two()
+        .context("bitmap width power-of-two overflow")?;
+    let previous_width = next_width / 2;
+    if next_width - width <= width - previous_width {
+        return Ok((width, height));
+    }
+
+    let scaled_height_numerator = height
+        .checked_mul(previous_width)
+        .context("scaled bitmap height overflow")?;
+    let aligned_height_denominator = width
+        .checked_mul(ALIGN_SIZE)
+        .context("aligned bitmap height overflow")?;
+    let aligned_height_units = scaled_height_numerator
+        .checked_add(aligned_height_denominator / 2)
+        .context("rounded bitmap height overflow")?
+        / aligned_height_denominator;
+    let scaled_height = aligned_height_units
+        .max(1)
+        .checked_mul(ALIGN_SIZE)
+        .context("scaled bitmap height overflow")?;
+    let minimum_height = min_pixels
+        .div_ceil(previous_width)
+        .div_ceil(ALIGN_SIZE)
+        .checked_mul(ALIGN_SIZE)
+        .context("minimum bitmap height overflow")?;
+
+    Ok((previous_width, scaled_height.max(minimum_height)))
 }
 
 fn round_to_multiple(value: usize, factor: usize) -> usize {
