@@ -1023,6 +1023,9 @@ pub(crate) fn matrix_matrix_pair(
         "paired matrix projection requires matching quantization families"
     );
     let activations = k_matrix_activations(vectors, row_count, input_size)?;
+    if let [activation] = activations.as_slice() {
+        return k_matrix_vector_pair(left, right, input_size, output_size, activation);
+    }
     let (left_output, right_output) = rayon::join(
         || k_matrix_matrix(left, output_size, &activations),
         || k_matrix_matrix(right, output_size, &activations),
@@ -1071,6 +1074,18 @@ pub(crate) fn matrix_matrix_triple(
         "triple matrix projection requires matching quantization families"
     );
     let activations = k_matrix_activations(vectors, row_count, input_size)?;
+    if let [activation] = activations.as_slice() {
+        return k_matrix_vector_triple(
+            first,
+            second,
+            third,
+            input_size,
+            first_size,
+            second_size,
+            third_size,
+            activation,
+        );
+    }
     let (first_output, (second_output, third_output)) = rayon::join(
         || k_matrix_matrix(first, first_size, &activations),
         || {
@@ -1128,13 +1143,22 @@ fn k_matrix_matrix(
 ) -> Result<Vec<f32>> {
     let input_size = matrix.dimensions()[0];
     let row_bytes = k_matrix_row_bytes(matrix, input_size, output_size)?;
-    let kernel = KDotKernel::detect();
     let kind = matrix.tensor_type();
+    let kernel = KDotKernel::detect();
     let output_len = activations
         .len()
         .checked_mul(output_size)
         .ok_or_else(|| anyhow::anyhow!("K-quantized matrix output size overflow"))?;
     let mut output = vec![0.0; output_len];
+    if let [activation] = activations {
+        let projection = KMatrixProjection {
+            data: matrix.data(),
+            row_bytes,
+            kind,
+        };
+        k_matrix_vector(&mut output, projection, activation, kernel);
+        return Ok(output);
+    }
     output
         .par_chunks_mut(MATRIX_ROW_TILE * output_size)
         .zip(activations.par_chunks(MATRIX_ROW_TILE))
@@ -1153,6 +1177,118 @@ fn k_matrix_matrix(
             }
         });
     Ok(output)
+}
+
+#[derive(Clone, Copy)]
+struct KMatrixProjection<'a> {
+    data: &'a [u8],
+    row_bytes: usize,
+    kind: TensorType,
+}
+
+impl<'a> KMatrixProjection<'a> {
+    fn new(matrix: &'a Tensor<'_>, input_size: usize, output_size: usize) -> Result<Self> {
+        Ok(Self {
+            data: matrix.data(),
+            row_bytes: k_matrix_row_bytes(matrix, input_size, output_size)?,
+            kind: matrix.tensor_type(),
+        })
+    }
+
+    fn dot(self, output_channel: usize, activation: &Q8KActivation, kernel: KDotKernel) -> f32 {
+        let row_start = output_channel * self.row_bytes;
+        kernel.dot(
+            self.kind,
+            &self.data[row_start..row_start + self.row_bytes],
+            activation,
+        )
+    }
+}
+
+fn k_matrix_vector(
+    output: &mut [f32],
+    projection: KMatrixProjection<'_>,
+    activation: &Q8KActivation,
+    kernel: KDotKernel,
+) {
+    output
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(output_channel, value)| {
+            *value = projection.dot(output_channel, activation, kernel);
+        });
+}
+
+fn k_matrix_vector_pair(
+    left: &Tensor,
+    right: &Tensor,
+    input_size: usize,
+    output_size: usize,
+    activation: &Q8KActivation,
+) -> Result<(Vec<f32>, Vec<f32>)> {
+    output_size
+        .checked_mul(2)
+        .ok_or_else(|| anyhow::anyhow!("paired K-quantized matrix output size overflow"))?;
+    let left = KMatrixProjection::new(left, input_size, output_size)?;
+    let right = KMatrixProjection::new(right, input_size, output_size)?;
+    let kernel = KDotKernel::detect();
+    let mut left_output = vec![0.0; output_size];
+    let mut right_output = vec![0.0; output_size];
+    left_output
+        .par_iter_mut()
+        .chain(right_output.par_iter_mut())
+        .enumerate()
+        .for_each(|(index, value)| {
+            let (projection, output_channel) = if index < output_size {
+                (left, index)
+            } else {
+                (right, index - output_size)
+            };
+            *value = projection.dot(output_channel, activation, kernel);
+        });
+    Ok((left_output, right_output))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn k_matrix_vector_triple(
+    first: &Tensor,
+    second: &Tensor,
+    third: &Tensor,
+    input_size: usize,
+    first_size: usize,
+    second_size: usize,
+    third_size: usize,
+    activation: &Q8KActivation,
+) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>)> {
+    let third_start = first_size
+        .checked_add(second_size)
+        .ok_or_else(|| anyhow::anyhow!("triple K-quantized matrix output size overflow"))?;
+    third_start
+        .checked_add(third_size)
+        .ok_or_else(|| anyhow::anyhow!("triple K-quantized matrix output size overflow"))?;
+    let first = KMatrixProjection::new(first, input_size, first_size)?;
+    let second = KMatrixProjection::new(second, input_size, second_size)?;
+    let third = KMatrixProjection::new(third, input_size, third_size)?;
+    let kernel = KDotKernel::detect();
+    let mut first_output = vec![0.0; first_size];
+    let mut second_output = vec![0.0; second_size];
+    let mut third_output = vec![0.0; third_size];
+    first_output
+        .par_iter_mut()
+        .chain(second_output.par_iter_mut())
+        .chain(third_output.par_iter_mut())
+        .enumerate()
+        .for_each(|(index, value)| {
+            let (projection, output_channel) = if index < first_size {
+                (first, index)
+            } else if index < third_start {
+                (second, index - first_size)
+            } else {
+                (third, index - third_start)
+            };
+            *value = projection.dot(output_channel, activation, kernel);
+        });
+    Ok((first_output, second_output, third_output))
 }
 
 fn is_k_quantized(kind: TensorType) -> bool {
@@ -1606,4 +1742,64 @@ pub(crate) fn vector_multiply(left: &mut [f32], right: &[f32]) -> Result<()> {
             .for_each(|(left, right)| *left *= right);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn row_parallel_k_matrix_vector_matches_serial_projection() {
+        let vector = (0..K_BLOCK_VALUES)
+            .map(|index| (f32::from(u16::try_from(index).unwrap()) - 127.0) / 31.0)
+            .collect::<Vec<_>>();
+        let activation = Q8KActivation::new(&vector).unwrap();
+
+        for (kind, row_bytes) in [
+            (TensorType::Q4K, Q4_K_BLOCK_BYTES),
+            (TensorType::Q6K, Q6_K_BLOCK_BYTES),
+        ] {
+            let data = encoded_k_rows(kind, 37);
+            let projection = KMatrixProjection {
+                data: &data,
+                row_bytes,
+                kind,
+            };
+            let expected = (0..37)
+                .map(|output_channel| {
+                    projection.dot(output_channel, &activation, KDotKernel::Scalar)
+                })
+                .collect::<Vec<_>>();
+            let mut output = vec![0.0; expected.len()];
+
+            k_matrix_vector(&mut output, projection, &activation, KDotKernel::Scalar);
+
+            assert_eq!(output, expected);
+        }
+    }
+
+    fn encoded_k_rows(kind: TensorType, row_count: usize) -> Vec<u8> {
+        let row_bytes = match kind {
+            TensorType::Q4K => Q4_K_BLOCK_BYTES,
+            TensorType::Q6K => Q6_K_BLOCK_BYTES,
+            _ => unreachable!(),
+        };
+        let mut data = vec![0; row_count * row_bytes];
+        for (row, bytes) in data.chunks_exact_mut(row_bytes).enumerate() {
+            bytes.iter_mut().enumerate().for_each(|(index, value)| {
+                *value = u8::try_from((row * 17 + index * 29) % 251).unwrap();
+            });
+            match kind {
+                TensorType::Q4K => {
+                    bytes[..2].copy_from_slice(&0x3c00_u16.to_le_bytes());
+                    bytes[2..4].copy_from_slice(&0x3800_u16.to_le_bytes());
+                }
+                TensorType::Q6K => {
+                    bytes[208..].copy_from_slice(&0x3c00_u16.to_le_bytes());
+                }
+                _ => unreachable!(),
+            }
+        }
+        data
+    }
 }
