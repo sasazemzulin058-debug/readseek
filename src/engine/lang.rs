@@ -61,8 +61,20 @@ impl From<Language> for u16 {
 }
 
 impl Language {
+    pub(crate) fn spec(self) -> Option<&'static LanguageSpec> {
+        LANGUAGE_SPECS.iter().find(|spec| spec.language == self)
+    }
+
     pub(crate) fn id(self) -> &'static str {
-        language_spec(self).map_or("unknown", |spec| spec.id)
+        self.spec().map_or("unknown", |spec| spec.id)
+    }
+
+    pub(crate) fn engine(self) -> Option<AnalysisEngine> {
+        self.spec().and_then(|spec| spec.engine)
+    }
+
+    pub(crate) fn has_symbols(self) -> bool {
+        self.spec().is_some_and(|spec| spec.has_symbols)
     }
 }
 
@@ -587,10 +599,6 @@ pub(crate) fn detect_by_path(path: &Path) -> Option<Language> {
                     .then_some(spec.language)
             })
         })
-}
-
-pub(crate) fn language_spec(language: Language) -> Option<&'static LanguageSpec> {
-    LANGUAGE_SPECS.iter().find(|spec| spec.language == language)
 }
 
 pub(crate) fn normalize_source_text(mut text: String) -> String {

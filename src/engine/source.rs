@@ -4,8 +4,7 @@
 use crate::engine::hash::{LineHash, hash_line, hash_text};
 use crate::engine::image::ImageInfo;
 use crate::engine::lang::{
-    AnalysisEngine, DocumentKind, Language, detect_by_path, detect_language, language_spec,
-    normalize_source_text,
+    AnalysisEngine, DocumentKind, Language, detect_by_path, detect_language, normalize_source_text,
 };
 use crate::engine::paths::bytes_contain_identifier;
 use crate::engine::pdf::PdfInfo;
@@ -296,7 +295,7 @@ pub(crate) fn source_from_text(
         detect_language(path, &text)
     };
     let language = language.unwrap_or(detected_language);
-    let engine = language_spec(language).and_then(|spec| spec.engine);
+    let engine = language.engine();
     let kind = if language == Language::Unknown {
         DocumentKind::Text
     } else {

@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use crate::engine::hash::LineHash;
-use crate::engine::lang::{AnalysisEngine, DocumentKind, Language, language_spec};
+use crate::engine::lang::{AnalysisEngine, DocumentKind, Language};
 use crate::engine::output::{Diagnostic, DiagnosticKind};
 use crate::engine::paths::{bytes_contain_identifier, identifier_spans};
 use crate::engine::source::{SourceFile, SourceLine, SourceMap, Symbol};
@@ -31,7 +31,7 @@ fn parse_tree_sitter_source_map(source: &SourceFile) -> Result<SourceMap> {
         return Ok(SourceMap { symbols });
     };
 
-    if !language_spec(source.detection.language).is_some_and(|s| s.has_symbols) {
+    if !source.detection.language.has_symbols() {
         return Ok(SourceMap { symbols });
     }
 
