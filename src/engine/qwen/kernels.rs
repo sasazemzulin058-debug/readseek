@@ -554,8 +554,21 @@ unsafe fn dot_q4_k_q8_k_avx2(row: &[u8], activation: &Q8KActivation) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn dot_q6_k_q8_k_avx2(row: &[u8], activation: &Q8KActivation) -> f32 {
-    use std::arch::x86_64::_mm256_loadu_si256;
+    use std::arch::x86_64::{
+        _mm_loadl_epi64, _mm256_add_epi32, _mm256_and_si256, _mm256_cvtepi8_epi32,
+        _mm256_loadu_si256, _mm256_or_si256, _mm256_permutevar8x32_epi32, _mm256_set1_epi8,
+        _mm256_setr_epi32, _mm256_setzero_si256, _mm256_slli_epi16, _mm256_srli_epi16,
+        _mm256_sub_epi8,
+    };
 
+    let low_mask = _mm256_set1_epi8(0x0f);
+    let high_mask = _mm256_set1_epi8(0x03);
+    let upper_high_mask = _mm256_set1_epi8(0x30);
+    let offset = _mm256_set1_epi8(32);
+    let scale_01_indices = _mm256_setr_epi32(0, 0, 0, 0, 1, 1, 1, 1);
+    let scale_23_indices = _mm256_setr_epi32(2, 2, 2, 2, 3, 3, 3, 3);
+    let scale_45_indices = _mm256_setr_epi32(4, 4, 4, 4, 5, 5, 5, 5);
+    let scale_67_indices = _mm256_setr_epi32(6, 6, 6, 6, 7, 7, 7, 7);
     let mut sum = 0.0;
     for (block_index, block) in row.chunks_exact(Q6_K_BLOCK_BYTES).enumerate() {
         let low = &block[..128];
@@ -564,37 +577,84 @@ unsafe fn dot_q6_k_q8_k_avx2(row: &[u8], activation: &Q8KActivation) -> f32 {
         let scale = activation.scales[block_index]
             * fp16_to_f32(u16::from_le_bytes([block[208], block[209]]));
         let values = &activation.values[block_index * K_BLOCK_VALUES..][..K_BLOCK_VALUES];
-        let mut product_sum = 0_i64;
+        let mut product_sums = _mm256_setzero_si256();
         for half in 0..2 {
             let low = &low[half * 64..];
             let high = &high[half * 32..];
             let scales = &scales[half * 8..];
             let values = &values[half * 128..];
-            for group in 0..4 {
-                let mut unpacked = [0_i8; 32];
-                for index in 0..32 {
-                    let low_value = match group {
-                        0 => low[index] & 0x0f,
-                        1 => low[index + 32] & 0x0f,
-                        2 => low[index] >> 4,
-                        3 => low[index + 32] >> 4,
-                        _ => unreachable!(),
-                    };
-                    unpacked[index] = i8::try_from(
-                        i16::from(low_value) | (i16::from((high[index] >> (group * 2)) & 3) << 4),
-                    )
-                    .unwrap_or(0)
-                        - 32;
-                }
-                let weights = unsafe { _mm256_loadu_si256(unpacked.as_ptr().cast()) };
-                let activation_values =
-                    unsafe { _mm256_loadu_si256(values.as_ptr().add(group * 32).cast()) };
-                let (first, second) = unsafe { dot_i8_i8_halves_avx2(weights, activation_values) };
-                product_sum += i64::from(i8::from_ne_bytes([scales[group * 2]])) * i64::from(first);
-                product_sum +=
-                    i64::from(i8::from_ne_bytes([scales[group * 2 + 1]])) * i64::from(second);
-            }
+            let low_first = unsafe { _mm256_loadu_si256(low.as_ptr().cast()) };
+            let low_second = unsafe { _mm256_loadu_si256(low.as_ptr().add(32).cast()) };
+            let high = unsafe { _mm256_loadu_si256(high.as_ptr().cast()) };
+            let scale_bytes = unsafe { _mm_loadl_epi64(scales.as_ptr().cast()) };
+            let scale_lanes = _mm256_cvtepi8_epi32(scale_bytes);
+
+            let weights = _mm256_sub_epi8(
+                _mm256_or_si256(
+                    _mm256_and_si256(low_first, low_mask),
+                    _mm256_slli_epi16::<4>(_mm256_and_si256(high, high_mask)),
+                ),
+                offset,
+            );
+            let activation_values = unsafe { _mm256_loadu_si256(values.as_ptr().cast()) };
+            product_sums = _mm256_add_epi32(product_sums, unsafe {
+                scaled_dot_i8_i8_avx2(
+                    weights,
+                    activation_values,
+                    _mm256_permutevar8x32_epi32(scale_lanes, scale_01_indices),
+                )
+            });
+
+            let high_shifted = _mm256_srli_epi16::<2>(high);
+            let weights = _mm256_sub_epi8(
+                _mm256_or_si256(
+                    _mm256_and_si256(low_second, low_mask),
+                    _mm256_slli_epi16::<4>(_mm256_and_si256(high_shifted, high_mask)),
+                ),
+                offset,
+            );
+            let activation_values = unsafe { _mm256_loadu_si256(values.as_ptr().add(32).cast()) };
+            product_sums = _mm256_add_epi32(product_sums, unsafe {
+                scaled_dot_i8_i8_avx2(
+                    weights,
+                    activation_values,
+                    _mm256_permutevar8x32_epi32(scale_lanes, scale_23_indices),
+                )
+            });
+
+            let weights = _mm256_sub_epi8(
+                _mm256_or_si256(
+                    _mm256_and_si256(_mm256_srli_epi16::<4>(low_first), low_mask),
+                    _mm256_and_si256(high, upper_high_mask),
+                ),
+                offset,
+            );
+            let activation_values = unsafe { _mm256_loadu_si256(values.as_ptr().add(64).cast()) };
+            product_sums = _mm256_add_epi32(product_sums, unsafe {
+                scaled_dot_i8_i8_avx2(
+                    weights,
+                    activation_values,
+                    _mm256_permutevar8x32_epi32(scale_lanes, scale_45_indices),
+                )
+            });
+
+            let weights = _mm256_sub_epi8(
+                _mm256_or_si256(
+                    _mm256_and_si256(_mm256_srli_epi16::<4>(low_second), low_mask),
+                    _mm256_and_si256(high_shifted, upper_high_mask),
+                ),
+                offset,
+            );
+            let activation_values = unsafe { _mm256_loadu_si256(values.as_ptr().add(96).cast()) };
+            product_sums = _mm256_add_epi32(product_sums, unsafe {
+                scaled_dot_i8_i8_avx2(
+                    weights,
+                    activation_values,
+                    _mm256_permutevar8x32_epi32(scale_lanes, scale_67_indices),
+                )
+            });
         }
+        let product_sum = unsafe { horizontal_sum_i32_avx2(product_sums) };
         sum += scale * product_sum.to_f32().unwrap_or(0.0);
     }
     sum
@@ -618,31 +678,38 @@ unsafe fn dot_u8_i8_avx2(
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn dot_i8_i8_halves_avx2(
+unsafe fn scaled_dot_i8_i8_avx2(
     left: std::arch::x86_64::__m256i,
     right: std::arch::x86_64::__m256i,
-) -> (i32, i32) {
-    use std::arch::x86_64::{_mm256_abs_epi8, _mm256_sign_epi8};
+    scales: std::arch::x86_64::__m256i,
+) -> std::arch::x86_64::__m256i {
+    use std::arch::x86_64::{
+        _mm256_abs_epi8, _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_mullo_epi32,
+        _mm256_set1_epi16, _mm256_sign_epi8,
+    };
+
     let absolute = _mm256_abs_epi8(left);
     let signed = _mm256_sign_epi8(right, left);
-    let pairs = unsafe { dot_u8_i8_lanes_avx2(absolute, signed) };
-    (pairs[..4].iter().sum(), pairs[4..].iter().sum())
+    let pairs = _mm256_maddubs_epi16(absolute, signed);
+    let lanes = _mm256_madd_epi16(pairs, _mm256_set1_epi16(1));
+    _mm256_mullo_epi32(lanes, scales)
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn dot_u8_i8_lanes_avx2(
-    left: std::arch::x86_64::__m256i,
-    right: std::arch::x86_64::__m256i,
-) -> [i32; 8] {
+unsafe fn horizontal_sum_i32_avx2(values: std::arch::x86_64::__m256i) -> i32 {
     use std::arch::x86_64::{
-        _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_set1_epi16, _mm256_storeu_si256,
+        _mm_add_epi32, _mm_cvtsi128_si32, _mm_srli_si128, _mm256_castsi256_si128,
+        _mm256_extracti128_si256,
     };
-    let pairs = _mm256_maddubs_epi16(left, right);
-    let lanes = _mm256_madd_epi16(pairs, _mm256_set1_epi16(1));
-    let mut sums = [0_i32; 8];
-    unsafe { _mm256_storeu_si256(sums.as_mut_ptr().cast(), lanes) };
-    sums
+
+    let halves = _mm_add_epi32(
+        _mm256_castsi256_si128(values),
+        _mm256_extracti128_si256::<1>(values),
+    );
+    let pairs = _mm_add_epi32(halves, _mm_srli_si128::<8>(halves));
+    let sum = _mm_add_epi32(pairs, _mm_srli_si128::<4>(pairs));
+    _mm_cvtsi128_si32(sum)
 }
 
 struct Q8Activation {
@@ -1776,6 +1843,38 @@ mod tests {
 
             assert_eq!(output, expected);
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn q6_k_avx2_dot_matches_scalar() {
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+
+        let vector = (0..K_BLOCK_VALUES)
+            .map(|index| (f32::from(u16::try_from(index).unwrap()) - 127.0) / 31.0)
+            .collect::<Vec<_>>();
+        let activation = Q8KActivation::new(&vector).unwrap();
+        let data = encoded_k_rows(TensorType::Q6K, 37);
+
+        for row in data.chunks_exact(Q6_K_BLOCK_BYTES) {
+            let expected = dot_q6_k_q8_k_scalar(row, &activation);
+            let actual = unsafe { dot_q6_k_q8_k_avx2(row, &activation) };
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+
+        let maximum_activation = Q8KActivation {
+            scales: vec![1.0],
+            values: vec![127; K_BLOCK_VALUES],
+            sums: vec![0; K_BLOCK_VALUES / Q8_K_SUM_VALUES],
+        };
+        let mut maximum_row = vec![0; Q6_K_BLOCK_BYTES];
+        maximum_row[192..208].fill(0x80);
+        maximum_row[208..].copy_from_slice(&0x3c00_u16.to_le_bytes());
+        let expected = dot_q6_k_q8_k_scalar(&maximum_row, &maximum_activation);
+        let actual = unsafe { dot_q6_k_q8_k_avx2(&maximum_row, &maximum_activation) };
+        assert_eq!(actual.to_bits(), expected.to_bits());
     }
 
     fn encoded_k_rows(kind: TensorType, row_count: usize) -> Vec<u8> {
