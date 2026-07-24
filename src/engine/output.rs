@@ -190,8 +190,9 @@ impl From<&SourceFile> for SourceHeader {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Display, AsRefStr)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub(crate) enum ImageMode {
     #[default]
     None,
@@ -199,6 +200,33 @@ pub(crate) enum ImageMode {
     Caption,
     Objects,
     Ocr,
+}
+
+impl ImageMode {
+    pub(crate) fn includes_caption(self) -> bool {
+        matches!(self, Self::All | Self::Caption)
+    }
+
+    pub(crate) fn includes_objects(self) -> bool {
+        matches!(self, Self::All | Self::Objects)
+    }
+
+    pub(crate) fn includes_ocr(self) -> bool {
+        matches!(self, Self::All | Self::Ocr)
+    }
+
+    pub(crate) fn select_analysis(
+        self,
+        analysis: Analysis,
+    ) -> (Option<String>, Option<Vec<DetectedObject>>, Option<String>) {
+        match self {
+            Self::None => (None, None, None),
+            Self::All => (analysis.caption, analysis.objects, analysis.ocr),
+            Self::Caption => (analysis.caption, None, None),
+            Self::Objects => (None, analysis.objects, None),
+            Self::Ocr => (None, None, analysis.ocr),
+        }
+    }
 }
 
 impl FromStr for ImageMode {
@@ -554,13 +582,7 @@ pub(crate) fn read_image_output(
     let Some(image) = source.detection.category.as_image() else {
         bail!("not an image");
     };
-    let (caption, objects, ocr) = match mode {
-        ImageMode::None => (None, None, None),
-        ImageMode::All => (analysis.caption, analysis.objects, analysis.ocr),
-        ImageMode::Caption => (analysis.caption, None, None),
-        ImageMode::Objects => (None, analysis.objects, None),
-        ImageMode::Ocr => (None, None, analysis.ocr),
-    };
+    let (caption, objects, ocr) = mode.select_analysis(analysis);
     let (type_, mime, encoding, data) = if let Some(prepared) = prepared {
         (
             prepared.mime.to_owned(),

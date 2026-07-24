@@ -539,9 +539,9 @@ pub(crate) fn read(
                 }
             };
             let request = Request {
-                caption: matches!(mode, ImageMode::All | ImageMode::Caption),
-                objects: matches!(mode, ImageMode::All | ImageMode::Objects),
-                ocr: matches!(mode, ImageMode::All | ImageMode::Ocr),
+                caption: mode.includes_caption(),
+                objects: mode.includes_objects(),
+                ocr: mode.includes_ocr(),
             };
             let Some((analysis, prepared)) =
                 analyze_pdf_image(&image, width, height, page, mode, request, &mut analyze)
@@ -553,13 +553,7 @@ pub(crate) fn read(
             } else {
                 ("image/png", None, None)
             };
-            let (caption, objects, ocr) = match mode {
-                ImageMode::None => (None, None, None),
-                ImageMode::All => (analysis.caption, analysis.objects, analysis.ocr),
-                ImageMode::Caption => (analysis.caption, None, None),
-                ImageMode::Objects => (None, analysis.objects, None),
-                ImageMode::Ocr => (None, None, analysis.ocr),
-            };
+            let (caption, objects, ocr) = mode.select_analysis(analysis);
             images.push(PdfImageOutput {
                 page,
                 width,

@@ -26,6 +26,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use indicatif::ProgressBar;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
+use strum_macros::{AsRefStr, Display};
 
 use crate::engine::qwen::{SpatialReduction, TextModel, VisionEmbedding, VisionInput, VisionModel};
 
@@ -45,8 +46,8 @@ const FIELD_OBJECTS: &str = "\"objects\": an array of at most 32 {\"label\": str
 const FIELD_OCR: &str =
     "\"ocr\": a string containing all visible text in reading order, preserving line breaks";
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, Display, AsRefStr)]
+#[strum(serialize_all = "lowercase")]
 pub(crate) enum VisionLevel {
     #[default]
     Low,

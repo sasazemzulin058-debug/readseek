@@ -274,9 +274,9 @@ impl cli::ReadCommand {
                 bail!("missing image bytes for {}", source.path.display());
             };
             let request = crate::engine::vision::Request {
-                caption: matches!(mode, cli::ImageMode::All | cli::ImageMode::Caption),
-                objects: matches!(mode, cli::ImageMode::All | cli::ImageMode::Objects),
-                ocr: matches!(mode, cli::ImageMode::All | cli::ImageMode::Ocr),
+                caption: mode.includes_caption(),
+                objects: mode.includes_objects(),
+                ocr: mode.includes_ocr(),
             };
             let analysis = run_vision(
                 crate::engine::qwen::VisionInput::Encoded(bytes),
