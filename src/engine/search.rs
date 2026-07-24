@@ -3,7 +3,7 @@
 
 use crate::engine::lang::{AnalysisEngine, EngineField, Language};
 use crate::engine::output::{SearchCapture, SearchFileOutput, SearchMatch};
-use crate::engine::source::{ContentCategory, SourceFile, line_hash, load_source, range_hashlines};
+use crate::engine::source::{SourceFile, line_hash, load_source, range_hashlines};
 use crate::engine::symbols;
 use anyhow::{Context, Result, bail};
 use std::path::Path;
@@ -71,7 +71,7 @@ pub(crate) fn search_file(
     let Ok(source) = load_source(path, override_language) else {
         return Ok(None);
     };
-    if !matches!(source.detection.category, ContentCategory::Text) {
+    if !source.is_text() {
         return Ok(None);
     }
     let detected_language = source.detection.language;

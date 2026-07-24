@@ -23,6 +23,32 @@ pub(crate) enum ContentCategory {
     Binary,
 }
 
+impl ContentCategory {
+    pub(crate) fn is_text(&self) -> bool {
+        matches!(self, Self::Text)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn is_binary(&self) -> bool {
+        matches!(self, Self::Binary)
+    }
+
+    pub(crate) fn as_image(&self) -> Option<&ImageInfo> {
+        match self {
+            Self::Image(image) => Some(image),
+            _ => None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn as_pdf(&self) -> Option<&PdfInfo> {
+        match self {
+            Self::Pdf(pdf) => Some(pdf),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Detection {
     pub(crate) file: PathBuf,
@@ -103,9 +129,13 @@ impl SourceFile {
         Ok(self.line_starts[line - 1] + column - 1)
     }
 
+    pub(crate) fn is_text(&self) -> bool {
+        self.detection.category.is_text()
+    }
+
     /// Reject non-text documents (images, binaries) before source processing.
     pub(crate) fn require_text(&self) -> Result<()> {
-        if matches!(self.detection.category, ContentCategory::Text) {
+        if self.is_text() {
             return Ok(());
         }
         bail!(

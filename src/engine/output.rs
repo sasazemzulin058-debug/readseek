@@ -551,7 +551,7 @@ pub(crate) fn read_image_output(
     prepared: Option<PreparedImage>,
 ) -> Result<ReadImageOutput> {
     let mime = source.detection.mime.clone();
-    let ContentCategory::Image(image) = source.detection.category else {
+    let Some(image) = source.detection.category.as_image() else {
         bail!("not an image");
     };
     let (caption, objects, ocr) = match mode {
@@ -581,7 +581,7 @@ pub(crate) fn read_image_output(
         file: source.path.clone(),
         type_,
         mime,
-        image,
+        image: *image,
         mode,
         caption,
         objects,
