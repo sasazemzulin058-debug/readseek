@@ -18,6 +18,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::hash;
+use crate::engine::image::ImageInfo;
 use crate::engine::vision::{DetectedObject, VisionLevel};
 
 const VISION_CACHE_DIR: &str = "vision";
@@ -231,7 +232,7 @@ pub(crate) fn image_hash(path: &Path) -> Option<String> {
         return None;
     }
     let bytes = fs::read(path).ok()?;
-    crate::engine::image::probe(&bytes)?;
+    ImageInfo::probe(&bytes)?;
     Some(hash::hash_bytes(&bytes))
 }
 

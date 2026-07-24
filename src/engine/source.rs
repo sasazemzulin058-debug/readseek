@@ -372,13 +372,13 @@ fn load_document(path: &Path, bytes: Vec<u8>) -> Result<LoadedDocument> {
         let text = String::from_utf8(bytes)
             .with_context(|| format!("{} is not UTF-8 text", path.display()))?;
         (ContentCategory::Text, text, None)
-    } else if let Some(image) = crate::engine::image::probe(&bytes) {
+    } else if let Some(image) = ImageInfo::probe(&bytes) {
         if mime.is_none() {
             mime = Some(image.format.mime_type().to_owned());
         }
         (ContentCategory::Image(image), String::new(), Some(bytes))
     } else if mime.as_deref() == Some("application/pdf") || bytes.starts_with(b"%PDF-") {
-        let pdf = crate::engine::pdf::probe(&bytes)?;
+        let pdf = PdfInfo::probe(&bytes)?;
         (ContentCategory::Pdf(pdf), String::new(), Some(bytes))
     } else {
         (ContentCategory::Binary, String::new(), None)

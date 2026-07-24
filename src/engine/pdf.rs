@@ -26,6 +26,14 @@ pub(crate) struct PdfInfo {
     pub(crate) pages: usize,
 }
 
+impl PdfInfo {
+    pub(crate) fn probe(bytes: &[u8]) -> Result<Self> {
+        let document = PdfDocument::from_bytes(bytes.to_vec()).context("parse PDF")?;
+        let pages = document.page_count().context("read PDF page count")?;
+        Ok(PdfInfo { pages })
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct ReadPdfOutput {
     format: &'static str,
@@ -64,12 +72,6 @@ struct StructuralSectionState {
 struct RegionParents<'a> {
     page_id: &'a str,
     base_parent_id: &'a str,
-}
-
-pub(crate) fn probe(bytes: &[u8]) -> Result<PdfInfo> {
-    let document = PdfDocument::from_bytes(bytes.to_vec()).context("parse PDF")?;
-    let pages = document.page_count().context("read PDF page count")?;
-    Ok(PdfInfo { pages })
 }
 
 pub(crate) fn extract_document(

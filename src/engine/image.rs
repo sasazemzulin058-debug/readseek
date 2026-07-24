@@ -12,6 +12,7 @@ use image::{
     DynamicImage, ImageFormat as RasterFormat, codecs::jpeg::JpegEncoder, imageops::FilterType,
 };
 use serde::Serialize;
+use strum_macros::{AsRefStr, Display};
 
 const MAX_LONG_EDGE: u32 = 1568;
 const JPEG_QUALITY: u8 = 80;
@@ -132,8 +133,9 @@ fn plain_drawio_label(value: &str) -> String {
 }
 
 /// A recognized image format.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize, Display, AsRefStr)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub(crate) enum ImageFormat {
     Png,
     Jpeg,
@@ -161,9 +163,13 @@ impl ImageFormat {
             Self::Ico => "image/x-icon",
         }
     }
+}
 
-    fn from_image_format(kind: image::ImageFormat) -> Option<Self> {
-        Some(match kind {
+impl TryFrom<image::ImageFormat> for ImageFormat {
+    type Error = ();
+
+    fn try_from(kind: image::ImageFormat) -> Result<Self, Self::Error> {
+        Ok(match kind {
             image::ImageFormat::Png => Self::Png,
             image::ImageFormat::Jpeg => Self::Jpeg,
             image::ImageFormat::Gif => Self::Gif,
@@ -172,7 +178,7 @@ impl ImageFormat {
             image::ImageFormat::Tiff => Self::Tiff,
             image::ImageFormat::Ico => Self::Ico,
             image::ImageFormat::Avif => Self::Avif,
-            _ => return None,
+            _ => return Err(()),
         })
     }
 }
@@ -220,27 +226,29 @@ fn encode_image(image: &DynamicImage) -> Result<(&'static str, Vec<u8>)> {
     }
 }
 
-/// Identify `bytes` as an image, reporting its format, pixel dimensions, and a
-/// best-effort animation flag. Returns `None` when the bytes are not a
-/// supported image.
-pub(crate) fn probe(bytes: &[u8]) -> Option<ImageInfo> {
-    let reader = image::ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .ok()?;
-    let format = ImageFormat::from_image_format(reader.format()?)?;
-    let (width, height) = reader.into_dimensions().ok()?;
-    let animated = match format {
-        ImageFormat::Png => png_animated(bytes),
-        ImageFormat::Gif => gif_animated(bytes),
-        ImageFormat::WebP => webp_animated(bytes),
-        _ => false,
-    };
-    Some(ImageInfo {
-        format,
-        width: usize::try_from(width).ok()?,
-        height: usize::try_from(height).ok()?,
-        animated,
-    })
+impl ImageInfo {
+    /// Identify `bytes` as an image, reporting its format, pixel dimensions, and a
+    /// best-effort animation flag. Returns `None` when the bytes are not a
+    /// supported image.
+    pub(crate) fn probe(bytes: &[u8]) -> Option<Self> {
+        let reader = image::ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()?;
+        let format = ImageFormat::try_from(reader.format()?).ok()?;
+        let (width, height) = reader.into_dimensions().ok()?;
+        let animated = match format {
+            ImageFormat::Png => png_animated(bytes),
+            ImageFormat::Gif => gif_animated(bytes),
+            ImageFormat::WebP => webp_animated(bytes),
+            _ => false,
+        };
+        Some(ImageInfo {
+            format,
+            width: usize::try_from(width).ok()?,
+            height: usize::try_from(height).ok()?,
+            animated,
+        })
+    }
 }
 
 /// Whether a PNG carries an `acTL` chunk (APNG) ahead of its first `IDAT`.
