@@ -144,6 +144,18 @@ impl SourceFile {
             self.detection.mime.as_deref().unwrap_or("unknown mime")
         );
     }
+
+    pub(crate) fn line_hash(&self, line: usize) -> Result<LineHash> {
+        self.line(line)
+            .map(SourceLine::hash)
+            .with_context(|| format!("line {line} not found in {}", self.path.display()))
+    }
+
+    pub(crate) fn range_hashlines(&self, start_line: usize, end_line: usize) -> Vec<HashLine> {
+        let start = start_line.saturating_sub(1);
+        let end = end_line.min(self.lines.len());
+        self.lines[start..end].iter().map(HashLine::from).collect()
+    }
 }
 
 #[derive(Debug)]
@@ -179,6 +191,17 @@ impl From<&SourceLine> for HashLine {
 #[derive(Debug)]
 pub(crate) struct SourceMap {
     pub(crate) symbols: Vec<Symbol>,
+}
+
+impl SourceMap {
+    pub(crate) fn find_symbol(&self, line: usize) -> Option<&Symbol> {
+        let idx = self.symbols.partition_point(|s| s.start_line <= line);
+        (0..idx)
+            .rev()
+            .filter(|&i| self.symbols[i].end_line >= line)
+            .min_by_key(|&i| self.symbols[i].end_line - self.symbols[i].start_line)
+            .map(|i| &self.symbols[i])
+    }
 }
 
 pub(crate) fn load_source(path: &Path, language: Option<Language>) -> Result<SourceFile> {
@@ -434,34 +457,4 @@ pub(crate) fn source_map_with_dir(
     }
 
     symbols::parse_source_map(source)
-}
-
-pub(crate) fn find_symbol(source_map: &SourceMap, line: usize) -> Option<Symbol> {
-    let symbols = &source_map.symbols;
-    let idx = symbols.partition_point(|s| s.start_line <= line);
-    (0..idx)
-        .rev()
-        .filter(|&i| symbols[i].end_line >= line)
-        .min_by_key(|&i| symbols[i].end_line - symbols[i].start_line)
-        .map(|i| symbols[i].clone())
-}
-
-pub(crate) fn line_hash(source: &SourceFile, line: usize) -> Result<LineHash> {
-    source
-        .line(line)
-        .map(SourceLine::hash)
-        .with_context(|| format!("line {line} not found in {}", source.path.display()))
-}
-
-pub(crate) fn range_hashlines(
-    source: &SourceFile,
-    start_line: usize,
-    end_line: usize,
-) -> Vec<HashLine> {
-    let start = start_line.saturating_sub(1);
-    let end = end_line.min(source.lines.len());
-    source.lines[start..end]
-        .iter()
-        .map(HashLine::from)
-        .collect()
 }

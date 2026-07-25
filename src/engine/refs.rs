@@ -7,8 +7,8 @@ use crate::engine::lang::{AnalysisEngine, EngineField, Language};
 use crate::engine::output::{CompactLocation, CompactOutput, RefLocation, RefsOutput};
 use crate::engine::paths::{command_paths, identifier_spans};
 use crate::engine::source::{
-    ContentCategory, SourceFile, Symbol, find_symbol, read_source_containing_with_buffer,
-    source_from_text, source_map_with_dir,
+    ContentCategory, SourceFile, Symbol, read_source_containing_with_buffer, source_from_text,
+    source_map_with_dir,
 };
 use crate::engine::symbols;
 use anyhow::{Context, Result, bail};
@@ -123,7 +123,7 @@ fn scoped_output(request: &Request) -> Result<RefsOutput> {
                 text: source_line.text.clone(),
                 symbol: source_map
                     .as_ref()
-                    .and_then(|sm| find_symbol(sm, source_line.number)),
+                    .and_then(|sm| sm.find_symbol(source_line.number).cloned()),
                 occurrence: Some(occurrence.kind),
             }
         })
@@ -214,7 +214,7 @@ fn scan_source(
             cached_text.clone_from(&line.text);
             cached_symbol = source_map
                 .as_ref()
-                .and_then(|sm| find_symbol(sm, line_number));
+                .and_then(|sm| sm.find_symbol(line_number).cloned());
         }
 
         references.push(RefLocation {

@@ -14,8 +14,8 @@ use crate::engine::hash::LineHash;
 use crate::engine::image::{ImageInfo, PreparedImage};
 use crate::engine::lang::{EngineField, Language};
 use crate::engine::source::{
-    ContentCategory, Detection, HashLine, SourceFile, Symbol, find_symbol, load_source,
-    load_source_from_bytes, range_hashlines, source_map,
+    ContentCategory, Detection, HashLine, SourceFile, Symbol, load_source, load_source_from_bytes,
+    source_map,
 };
 use crate::engine::target::Target;
 use crate::engine::vision::{Analysis, DetectedObject};
@@ -700,14 +700,15 @@ pub(crate) fn symbol_output(
 
             symbol.clone()
         }
-        SymbolAddress::Line(line) => {
-            find_symbol(&source_map, line).with_context(|| format!("no symbol at line {line}"))?
-        }
+        SymbolAddress::Line(line) => source_map
+            .find_symbol(line)
+            .cloned()
+            .with_context(|| format!("no symbol at line {line}"))?,
     };
 
     Ok(SymbolOutput {
         header: source.into(),
-        hashlines: range_hashlines(source, symbol.start_line, symbol.end_line),
+        hashlines: source.range_hashlines(symbol.start_line, symbol.end_line),
         symbol,
     })
 }
@@ -734,7 +735,7 @@ pub(crate) fn identify_output(
         })
         .or_else(|| identify_byte_scan(source_line, line_start, column));
     let source_map = source_map(source)?;
-    let symbol = find_symbol(&source_map, line);
+    let symbol = source_map.find_symbol(line).cloned();
 
     Ok(IdentifyOutput {
         header: source.into(),

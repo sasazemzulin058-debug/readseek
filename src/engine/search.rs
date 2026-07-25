@@ -3,7 +3,7 @@
 
 use crate::engine::lang::{AnalysisEngine, EngineField, Language};
 use crate::engine::output::{SearchCapture, SearchFileOutput, SearchMatch};
-use crate::engine::source::{SourceFile, line_hash, load_source, range_hashlines};
+use crate::engine::source::{SourceFile, load_source};
 use crate::engine::symbols;
 use anyhow::{Context, Result, bail};
 use std::path::Path;
@@ -430,9 +430,9 @@ fn search_match(
                 name: capture.name.to_owned(),
                 start_line: capture.start_line,
                 end_line: capture.end_line,
-                start_hash: line_hash(source, capture.start_line)?,
-                end_hash: line_hash(source, capture.end_line)?,
-                hashlines: range_hashlines(source, capture.start_line, capture.end_line),
+                start_hash: source.line_hash(capture.start_line)?,
+                end_hash: source.line_hash(capture.end_line)?,
+                hashlines: source.range_hashlines(capture.start_line, capture.end_line),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -442,9 +442,9 @@ fn search_match(
     Ok(SearchMatch {
         start_line,
         end_line,
-        start_hash: line_hash(source, start_line)?,
-        end_hash: line_hash(source, end_line)?,
-        hashlines: range_hashlines(source, start_line, end_line),
+        start_hash: source.line_hash(start_line)?,
+        end_hash: source.line_hash(end_line)?,
+        hashlines: source.range_hashlines(start_line, end_line),
         captures,
     })
 }
