@@ -17,7 +17,7 @@ use crate::engine::source::{
     ContentCategory, Detection, HashLine, SourceFile, Symbol, find_symbol, load_source,
     load_source_from_bytes, range_hashlines, source_map,
 };
-use crate::engine::target::{Target, TargetAddress};
+use crate::engine::target::Target;
 use crate::engine::vision::{Analysis, DetectedObject};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Display, AsRefStr)]
 #[strum(serialize_all = "lowercase")]
@@ -541,24 +541,7 @@ pub(crate) struct SearchCapture {
 }
 
 pub(crate) fn resolve_target(source: &SourceFile, target: &Target) -> Result<Option<usize>> {
-    match target.address.as_ref() {
-        Some(TargetAddress::Line(line)) => Ok(Some(*line)),
-        Some(TargetAddress::Hash(hash)) => {
-            let target = hash
-                .parse::<LineHash>()
-                .with_context(|| format!("invalid target hash {hash}"))?;
-            source
-                .lines
-                .iter()
-                .find_map(|line| (line.hash() == target).then_some(line.number))
-                .with_context(|| format!("hash {hash} not found in {}", source.path.display()))
-                .map(Some)
-        }
-        Some(TargetAddress::Name(_)) => {
-            bail!("name targets are not supported for this command")
-        }
-        None => Ok(None),
-    }
+    target.resolve_line(source)
 }
 
 pub(crate) fn load_source_for_input(

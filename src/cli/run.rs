@@ -416,9 +416,7 @@ impl cli::SymbolCommand {
     fn run(&self) -> Result<String> {
         let (target, source) = load_source(self.target.as_deref(), self.name, self.language)?;
         source.require_text()?;
-        let address = if let Some(crate::engine::target::TargetAddress::Name(name)) =
-            target.address.as_ref()
-        {
+        let address = if let Some(name) = target.address.as_ref().and_then(|addr| addr.name()) {
             output::SymbolAddress::Name(name)
         } else {
             if self.name {

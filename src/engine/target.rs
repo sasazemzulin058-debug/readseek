@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
 use crate::engine::hash::LineHash;
+use crate::engine::source::SourceFile;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Target {
@@ -69,5 +70,38 @@ impl Target {
             address,
             read_stdin,
         })
+    }
+
+    pub(crate) fn resolve_line(&self, source: &SourceFile) -> Result<Option<usize>> {
+        self.address
+            .as_ref()
+            .map(|addr| addr.resolve(source))
+            .transpose()
+    }
+}
+
+impl TargetAddress {
+    pub(crate) fn resolve(&self, source: &SourceFile) -> Result<usize> {
+        match self {
+            Self::Line(line) => Ok(*line),
+            Self::Hash(hash) => {
+                let target = hash
+                    .parse::<LineHash>()
+                    .with_context(|| format!("invalid target hash {hash}"))?;
+                source
+                    .lines
+                    .iter()
+                    .find_map(|line| (line.hash() == target).then_some(line.number))
+                    .with_context(|| format!("hash {hash} not found in {}", source.path.display()))
+            }
+            Self::Name(_) => bail!("name targets are not supported for this command"),
+        }
+    }
+
+    pub(crate) fn name(&self) -> Option<&str> {
+        match self {
+            Self::Name(name) => Some(name),
+            _ => None,
+        }
     }
 }
