@@ -39,6 +39,54 @@ impl FromStr for Format {
     }
 }
 
+pub(crate) trait OutputFormatter {
+    fn format_def(&self, output: &DefOutput) -> Result<String>;
+    fn format_refs(&self, output: &RefsOutput) -> Result<String>;
+    fn format_document(&self, document: &crate::engine::document::Document) -> Result<String>;
+}
+
+pub(crate) struct JsonFormatter;
+pub(crate) struct PlainFormatter;
+
+impl OutputFormatter for JsonFormatter {
+    fn format_def(&self, output: &DefOutput) -> Result<String> {
+        Ok(serde_json::to_string(output)?)
+    }
+
+    fn format_refs(&self, output: &RefsOutput) -> Result<String> {
+        Ok(serde_json::to_string(output)?)
+    }
+
+    fn format_document(&self, document: &crate::engine::document::Document) -> Result<String> {
+        Ok(serde_json::to_string(document)?)
+    }
+}
+
+impl OutputFormatter for PlainFormatter {
+    fn format_def(&self, output: &DefOutput) -> Result<String> {
+        Ok(serde_json::to_string(&crate::engine::def::compact(output))?)
+    }
+
+    fn format_refs(&self, output: &RefsOutput) -> Result<String> {
+        Ok(serde_json::to_string(&crate::engine::refs::compact(
+            output,
+        ))?)
+    }
+
+    fn format_document(&self, document: &crate::engine::document::Document) -> Result<String> {
+        Ok(crate::engine::document_view::render(document))
+    }
+}
+
+impl Format {
+    pub(crate) fn formatter(self) -> &'static dyn OutputFormatter {
+        match self {
+            Self::Json => &JsonFormatter,
+            Self::Plain => &PlainFormatter,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub(crate) enum DetectOutput {

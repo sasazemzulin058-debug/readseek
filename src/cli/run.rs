@@ -392,10 +392,7 @@ impl cli::ViewCommand {
         };
         let document = document_view::select(&document, selection)?;
 
-        match self.format {
-            output::Format::Plain => Ok(document_view::render(&document)),
-            output::Format::Json => Ok(serde_json::to_string(&document)?),
-        }
+        self.format.formatter().format_document(&document)
     }
 }
 
@@ -458,10 +455,7 @@ impl cli::DefCommand {
             flags,
         };
         let output = def::output(&request)?;
-        match self.format {
-            output::Format::Plain => Ok(serde_json::to_string(&def::compact(&output))?),
-            output::Format::Json => Ok(serde_json::to_string(&output)?),
-        }
+        self.format.formatter().format_def(&output)
     }
 }
 
@@ -478,10 +472,7 @@ impl cli::RefsCommand {
             flags,
         };
         let output = refs::output(&request)?;
-        match self.format {
-            output::Format::Plain => Ok(serde_json::to_string(&refs::compact(&output))?),
-            output::Format::Json => Ok(serde_json::to_string(&output)?),
-        }
+        self.format.formatter().format_refs(&output)
     }
 }
 
