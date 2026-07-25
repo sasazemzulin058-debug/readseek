@@ -3,7 +3,7 @@ name: Build release assets
 on:
   push:
     tags:
-      - '*.*.*'
+      - '[0-9]*.[0-9]*.[0-9]*'
   workflow_dispatch:
 
 permissions:
@@ -38,9 +38,9 @@ jobs:
           const tags = execFileSync('git', ['tag', '--list', '--sort=-v:refname'], {
             encoding: 'utf8',
           }).trim().split('\n').filter((tag) => /^\d+\.\d+\.\d+$/.test(tag));
-          const tag = process.env.GITHUB_REF_TYPE === 'tag'
-            ? process.env.GITHUB_REF_NAME
-            : tags[0];
+          const refName = process.env.GITHUB_REF_NAME;
+          const isReleaseTag = process.env.GITHUB_REF_TYPE === 'tag' && /^\d+\.\d+\.\d+$/.test(refName);
+          const tag = isReleaseTag ? refName : tags[0];
           if (!tag || !/^\d+\.\d+\.\d+$/.test(tag)) {
             throw new Error('no release tag found');
           }
