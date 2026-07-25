@@ -14,18 +14,36 @@ const DEFAULT_READ_LIMIT = 2000;
 const EDIT_RESULT_READ_LIMIT = 40;
 const MAX_DOCUMENT_OUTPUT_BYTES = 256 * 1024;
 const MAX_DOCUMENT_OUTPUT_LINES = 2000;
-const EDITING_POLICY = [
-  "ReadSeek editing policy:",
-  "- Prefer readseek_read over built-in file reads when preparing to edit existing text; its LINE:HASH anchors are required by readseek_edit.",
+const TOOL_POLICY = [
+  "ReadSeek tool policy:",
+  "- Prefer readseek_* tools over OpenCode built-ins whenever they can do the job.",
+  "- Prefer readseek_read for text file reads; its LINE:HASH anchors are required by readseek_edit.",
+  "- Prefer readseek_grep for text/regex search and readseek_search for syntax-aware code shapes.",
+  "- Prefer readseek_map, readseek_def, readseek_refs, and readseek_hover for symbol navigation.",
   "- Prefer readseek_edit for existing text files, readseek_write for whole-file creation or replacement, and readseek_rename for symbol renames.",
-  "- Do not use built-in edit, write, or apply_patch when the corresponding ReadSeek tool can perform the change.",
+  "- Do not use built-in read, edit, write, grep, or apply_patch when the corresponding ReadSeek tool can perform the change.",
   "- Use readseek_check after source edits for a quick syntax check.",
 ].join("\n");
 const PREFERRED_TOOL_DESCRIPTIONS: Record<string, string> = {
+  readseek_read: "Preferred file reader; returns LINE:HASH anchors required by readseek_edit.",
   readseek_edit: "Preferred tool for editing existing text files with verified LINE:HASH anchors.",
-  readseek_read: "Preferred file reader when an existing text file may be edited; returns the anchors required by readseek_edit.",
-  readseek_rename: "Preferred tool for renaming code symbols safely across their resolved bindings.",
   readseek_write: "Preferred tool for creating or replacing a complete text file.",
+  readseek_rename: "Preferred tool for renaming code symbols safely across their resolved bindings.",
+  readseek_grep: "Preferred text/regex search; returns edit-ready LINE:HASH anchors.",
+  readseek_search: "Preferred syntax-aware code search for AST shapes and call sites.",
+  readseek_map: "Preferred structural outline of symbols in a source file.",
+  readseek_def: "Preferred symbol definition lookup.",
+  readseek_refs: "Preferred identifier usage finder before rename or delete.",
+  readseek_hover: "Preferred cursor token and enclosing-symbol inspector.",
+  readseek_view: "Preferred PDF structure and content viewer.",
+  readseek_check: "Preferred quick syntax check after source edits.",
+};
+const FALLBACK_TOOL_DESCRIPTIONS: Record<string, string> = {
+  read: "Fallback only. Prefer readseek_read for text files so edits can use LINE:HASH anchors.",
+  edit: "Fallback only. Prefer readseek_edit with anchors from readseek_read/readseek_grep/readseek_search.",
+  write: "Fallback only. Prefer readseek_write so the result returns LINE:HASH anchors.",
+  grep: "Fallback only. Prefer readseek_grep for project text search with edit-ready anchors.",
+  apply_patch: "Fallback only. Prefer readseek_edit for existing text files.",
 };
 const READSEEK_PLATFORM_PACKAGES: Record<string, string> = {
   "darwin-arm64": "@jarkkojs/readseek-darwin-arm64",
@@ -1354,11 +1372,16 @@ export const ReadSeekPlugin: Plugin = async (_input, options) => {
       ),
     },
     "experimental.chat.system.transform": async (_input, output) => {
-      output.system.push(EDITING_POLICY);
+      output.system.push(TOOL_POLICY);
     },
     "tool.definition": async (input, output) => {
       const preference = PREFERRED_TOOL_DESCRIPTIONS[input.toolID];
-      if (preference) output.description = `${preference} ${output.description}`;
+      if (preference) {
+        output.description = `${preference} ${output.description}`;
+        return;
+      }
+      const fallback = FALLBACK_TOOL_DESCRIPTIONS[input.toolID];
+      if (fallback) output.description = `${fallback} ${output.description}`;
     },
     event: async ({ event }) => {
       if (event.type === "file.edited" || event.type === "file.watcher.updated") {

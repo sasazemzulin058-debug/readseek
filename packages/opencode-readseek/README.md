@@ -36,8 +36,8 @@ The plugin requests read, grep, external-directory, and edit permissions as need
 File changes invalidate remembered anchors. Compaction state retains fresh paths
 and pending rename plans. Text reads return at most 2,000 lines by default.
 
-OpenCode is instructed to prefer ReadSeek's read, edit, write, and rename tools;
-built-in tools remain available as fallbacks.
+OpenCode is instructed to prefer ReadSeek tools over built-in read/edit/write/grep
+and symbol navigation; built-ins remain available as fallbacks.
 
 ## Configuration
 
