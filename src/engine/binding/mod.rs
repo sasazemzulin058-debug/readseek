@@ -63,8 +63,8 @@ pub(crate) struct Conflict {
 
 /// Parse `source` and return its binding table and syntax tree, or `None` when
 /// the language has no binding support or the parse fails.
-fn parse_source(source: &SourceFile) -> Option<(&'static BindingTable, Tree)> {
-    let table = binding_table(source.detection.language)?;
+fn parse_source(source: &SourceFile) -> Option<(&'static dyn LanguageBindingRule, Tree)> {
+    let table = binding_rules(source.detection.language)?;
     let language = tree_sitter_language(source.detection.language)?;
     let mut parser = Parser::new();
     parser.set_language(&language).ok()?;
@@ -237,7 +237,7 @@ pub(crate) fn cross_file_matches(
 fn collect_free_occurrences(
     root: Node<'_>,
     src: &[u8],
-    table: &BindingTable,
+    table: &dyn LanguageBindingRule,
     name: &str,
     new_name: &str,
     declarations: &[Declaration<'_>],
@@ -247,7 +247,7 @@ fn collect_free_occurrences(
     while let Some(node) = stack.pop() {
         if is_identifier_kind(node.kind(), table)
             && node.child_count() == 0
-            && (table.is_reference)(node)
+            && table.is_reference(node)
             && node.utf8_text(src) == Ok(name)
         {
             let resolves_old = resolve_node(node, name, declarations, table);
@@ -274,7 +274,7 @@ fn find_conflicts(
     new_name: &str,
     occurrences: &[Occurrence],
     declarations: &[Declaration<'_>],
-    table: &BindingTable,
+    table: &dyn LanguageBindingRule,
 ) -> Vec<Conflict> {
     occurrences
         .iter()
@@ -303,14 +303,14 @@ struct Declaration<'tree> {
 /// An identifier that escapes its scope (a parameter default or leading
 /// comprehension iterable) is placed in the scope enclosing its nearest
 /// syntactic scope, matching where Python evaluates it.
-fn scope_of(node: Node<'_>, table: &BindingTable) -> usize {
-    let mut current = if (table.escapes_scope)(node) {
+fn scope_of(node: Node<'_>, table: &dyn LanguageBindingRule) -> usize {
+    let mut current = if table.escapes_scope(node) {
         enclosing_scope(node, table).and_then(|scope| scope.parent())
     } else {
         node.parent()
     };
     while let Some(parent) = current {
-        if table.scope_kinds.contains(&parent.kind()) && !(table.binds_past)(node, parent.kind()) {
+        if table.scope_kinds().contains(&parent.kind()) && !table.binds_past(node, parent.kind()) {
             return parent.id();
         }
         current = parent.parent();
@@ -319,10 +319,13 @@ fn scope_of(node: Node<'_>, table: &BindingTable) -> usize {
 }
 
 /// The nearest ancestor of `node` that opens a scope, if any.
-fn enclosing_scope<'tree>(node: Node<'tree>, table: &BindingTable) -> Option<Node<'tree>> {
+fn enclosing_scope<'tree>(
+    node: Node<'tree>,
+    table: &dyn LanguageBindingRule,
+) -> Option<Node<'tree>> {
     let mut current = node.parent();
     while let Some(parent) = current {
-        if table.scope_kinds.contains(&parent.kind()) {
+        if table.scope_kinds().contains(&parent.kind()) {
             return Some(parent);
         }
         current = parent.parent();
@@ -341,12 +344,12 @@ fn node_root(node: Node<'_>) -> Node<'_> {
 fn collect_declarations<'tree>(
     root: Node<'tree>,
     src: &[u8],
-    table: &BindingTable,
+    table: &dyn LanguageBindingRule,
     out: &mut Vec<Declaration<'tree>>,
 ) {
     let mut stack: Vec<Node<'tree>> = vec![root];
     while let Some(node) = stack.pop() {
-        for ident in (table.declared_idents)(node, src) {
+        for ident in table.declared_idents(node, src) {
             if let Ok(name) = ident.utf8_text(src) {
                 out.push(Declaration {
                     name: name.to_owned(),
@@ -376,10 +379,10 @@ fn resolve_node(
     node: Node<'_>,
     name: &str,
     declarations: &[Declaration<'_>],
-    table: &BindingTable,
+    table: &dyn LanguageBindingRule,
 ) -> Option<usize> {
     let use_start = node.start_byte();
-    let start = if (table.escapes_scope)(node) {
+    let start = if table.escapes_scope(node) {
         enclosing_scope(node, table).and_then(|scope| scope.parent())?
     } else {
         node
@@ -387,19 +390,19 @@ fn resolve_node(
     let mut scope = Some(start);
     let mut left_innermost_scope = false;
     while let Some(current) = scope {
-        let is_scope = current.parent().is_none() || table.scope_kinds.contains(&current.kind());
+        let is_scope = current.parent().is_none() || table.scope_kinds().contains(&current.kind());
         let hidden_class =
-            left_innermost_scope && table.class_scope_kinds.contains(&current.kind());
+            left_innermost_scope && table.class_scope_kinds().contains(&current.kind());
         if !hidden_class {
             let scoped = || {
                 declarations.iter().filter(|declaration| {
                     declaration.name == name && declaration.scope == current.id()
                 })
             };
-            let resolved = match table.resolution {
+            let resolved = match table.resolution() {
                 Resolution::Lexical
                     if scoped()
-                        .any(|declaration| (table.unifies_declarations)(declaration.ident)) =>
+                        .any(|declaration| table.unifies_declarations(declaration.ident)) =>
                 {
                     scoped().min_by_key(|declaration| declaration.ident.start_byte())
                 }
@@ -425,7 +428,7 @@ fn resolve_node(
 fn collect_occurrences(
     root: Node<'_>,
     src: &[u8],
-    table: &BindingTable,
+    table: &dyn LanguageBindingRule,
     name: &str,
     target_def: usize,
     declarations: &[Declaration<'_>],
@@ -435,7 +438,7 @@ fn collect_occurrences(
     while let Some(node) = stack.pop() {
         if is_identifier_kind(node.kind(), table)
             && node.child_count() == 0
-            && (table.is_reference)(node)
+            && table.is_reference(node)
             && node.utf8_text(src) == Ok(name)
         {
             let resolved = resolve_node(node, name, declarations, table);
@@ -462,7 +465,10 @@ fn collect_occurrences(
     }
 }
 
-fn identifier_leaf<'tree>(node: Node<'tree>, table: &BindingTable) -> Option<Node<'tree>> {
+fn identifier_leaf<'tree>(
+    node: Node<'tree>,
+    table: &dyn LanguageBindingRule,
+) -> Option<Node<'tree>> {
     let mut current = node;
     while current.named_child_count() > 0 {
         let byte = current.start_byte();
@@ -471,286 +477,332 @@ fn identifier_leaf<'tree>(node: Node<'tree>, table: &BindingTable) -> Option<Nod
             _ => break,
         }
     }
-    (is_identifier_kind(current.kind(), table) && (table.is_reference)(current)).then_some(current)
+    (is_identifier_kind(current.kind(), table) && table.is_reference(current)).then_some(current)
 }
 
-fn is_identifier_kind(kind: &str, table: &BindingTable) -> bool {
-    table.identifier_kinds.contains(&kind)
+fn is_identifier_kind(kind: &str, table: &dyn LanguageBindingRule) -> bool {
+    table.identifier_kinds().contains(&kind)
 }
 
 /// How repeated declarations of one name within a scope relate to each other.
 #[derive(Clone, Copy)]
-enum Resolution {
-    /// A later declaration shadows earlier ones; a use binds to the nearest
-    /// declaration that lexically precedes it (Rust, C/C++).
+pub(crate) enum Resolution {
     Lexical,
-    /// All declarations of a name in a scope are the same binding; a use binds to
-    /// the first one regardless of order (Python reassignment).
     Hoisted,
 }
 
 /// Per-language description of scopes and the identifiers that introduce bindings.
-struct BindingTable {
-    /// Node kinds that open a new lexical scope.
-    scope_kinds: &'static [&'static str],
-    /// Scope kinds whose declarations are visible only to their own direct body,
-    /// not to any nested scope (Python class bodies).
-    class_scope_kinds: &'static [&'static str],
-    /// Leaf node kinds that count as references to a name.
-    identifier_kinds: &'static [&'static str],
-    /// Given a node and the source bytes, the identifier nodes that introduce a
-    /// binding in its scope.
-    declared_idents: for<'a, 'b> fn(Node<'a>, &'b [u8]) -> Vec<Node<'a>>,
-    /// How a use resolves among same-name declarations sharing a scope.
-    resolution: Resolution,
-    /// Whether an identifier leaf is a renameable reference rather than, for
-    /// example, an attribute member or keyword-argument name.
-    is_reference: fn(Node<'_>) -> bool,
-    /// Whether an identifier is evaluated in the scope enclosing its nearest
-    /// syntactic scope (a parameter default or a leading comprehension iterable).
-    escapes_scope: fn(Node<'_>) -> bool,
-    /// Whether a declaration binds past a scope of the given kind rather than in
-    /// it (a Python walrus target binds past the comprehension it appears in).
-    binds_past: fn(Node<'_>, &str) -> bool,
-    /// Whether declarations of this kind share a binding with same-named
-    /// declarations in the same scope.
-    unifies_declarations: fn(Node<'_>) -> bool,
+pub(crate) trait LanguageBindingRule: Sync {
+    fn scope_kinds(&self) -> &'static [&'static str];
+    fn class_scope_kinds(&self) -> &'static [&'static str] {
+        &[]
+    }
+    fn identifier_kinds(&self) -> &'static [&'static str];
+    fn declared_idents<'a>(&self, node: Node<'a>, src: &[u8]) -> Vec<Node<'a>>;
+    fn resolution(&self) -> Resolution {
+        Resolution::Lexical
+    }
+    fn is_reference(&self, _node: Node<'_>) -> bool {
+        true
+    }
+    fn escapes_scope(&self, _node: Node<'_>) -> bool {
+        false
+    }
+    fn binds_past(&self, _node: Node<'_>, _scope_kind: &str) -> bool {
+        false
+    }
+    fn unifies_declarations(&self, _node: Node<'_>) -> bool {
+        false
+    }
 }
 
-/// Default reference filter: every identifier-kind leaf is a reference.
-fn any_reference(_node: Node<'_>) -> bool {
-    true
-}
-
-/// Default scope-escape predicate: identifiers stay in their syntactic scope.
-fn never_escapes(_node: Node<'_>) -> bool {
-    false
-}
-
-/// Default bind-past predicate: declarations bind in their nearest scope.
-fn never_binds_past(_node: Node<'_>, _scope_kind: &str) -> bool {
-    false
-}
-
-/// Whether a declaration shares its binding with same-named declarations.
-fn never_unifies_declarations(_node: Node<'_>) -> bool {
-    false
-}
-
-fn binding_table(language: Language) -> Option<&'static BindingTable> {
+fn binding_rules(language: Language) -> Option<&'static dyn LanguageBindingRule> {
     match language {
-        Language::Rust => Some(&RUST_TABLE),
-        Language::C | Language::Cpp => Some(&CPP_TABLE),
-        Language::Python => Some(&PYTHON_TABLE),
-        Language::Go => Some(&GO_TABLE),
-        Language::Java => Some(&JAVA_TABLE),
+        Language::Rust => Some(&RUST_RULES),
+        Language::C | Language::Cpp => Some(&CPP_RULES),
+        Language::Python => Some(&PYTHON_RULES),
+        Language::Go => Some(&GO_RULES),
+        Language::Java => Some(&JAVA_RULES),
         Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
-            Some(&TYPESCRIPT_TABLE)
+            Some(&TYPESCRIPT_RULES)
         }
-        Language::CSharp => Some(&CSHARP_TABLE),
-        Language::Swift => Some(&SWIFT_TABLE),
-        Language::Vimscript => Some(&VIMSCRIPT_TABLE),
+        Language::CSharp => Some(&CSHARP_RULES),
+        Language::Swift => Some(&SWIFT_RULES),
+        Language::Vimscript => Some(&VIMSCRIPT_RULES),
         _ => None,
     }
 }
 
-static RUST_TABLE: BindingTable = BindingTable {
-    scope_kinds: &[
-        "block",
-        "function_item",
-        "closure_expression",
-        "match_arm",
-        "for_expression",
-        "while_expression",
-        "if_expression",
-    ],
-    class_scope_kinds: &[],
-    identifier_kinds: &["identifier"],
-    declared_idents: rust::declared_idents,
-    resolution: Resolution::Lexical,
-    is_reference: any_reference,
-    escapes_scope: never_escapes,
-    binds_past: never_binds_past,
-    unifies_declarations: never_unifies_declarations,
-};
+struct RustRules;
+impl LanguageBindingRule for RustRules {
+    fn scope_kinds(&self) -> &'static [&'static str] {
+        &[
+            "block",
+            "function_item",
+            "closure_expression",
+            "match_arm",
+            "for_expression",
+            "while_expression",
+            "if_expression",
+        ]
+    }
+    fn identifier_kinds(&self) -> &'static [&'static str] {
+        &["identifier"]
+    }
+    fn declared_idents<'a>(&self, node: Node<'a>, src: &[u8]) -> Vec<Node<'a>> {
+        rust::declared_idents(node, src)
+    }
+}
 
-static CPP_TABLE: BindingTable = BindingTable {
-    scope_kinds: &[
-        "compound_statement",
-        "function_definition",
-        "if_statement",
-        "switch_statement",
-        "while_statement",
-        "for_statement",
-        "for_range_loop",
-        "catch_clause",
-        "lambda_expression",
-    ],
-    class_scope_kinds: &[],
-    identifier_kinds: &["identifier"],
-    declared_idents: cpp::declared_idents,
-    resolution: Resolution::Lexical,
-    is_reference: any_reference,
-    escapes_scope: never_escapes,
-    binds_past: never_binds_past,
-    unifies_declarations: never_unifies_declarations,
-};
+struct CppRules;
+impl LanguageBindingRule for CppRules {
+    fn scope_kinds(&self) -> &'static [&'static str] {
+        &[
+            "compound_statement",
+            "function_definition",
+            "if_statement",
+            "switch_statement",
+            "while_statement",
+            "for_statement",
+            "for_range_loop",
+            "catch_clause",
+            "lambda_expression",
+        ]
+    }
+    fn identifier_kinds(&self) -> &'static [&'static str] {
+        &["identifier"]
+    }
+    fn declared_idents<'a>(&self, node: Node<'a>, src: &[u8]) -> Vec<Node<'a>> {
+        cpp::declared_idents(node, src)
+    }
+}
 
-static PYTHON_TABLE: BindingTable = BindingTable {
-    scope_kinds: &[
-        "function_definition",
-        "lambda",
-        "class_definition",
-        "list_comprehension",
-        "set_comprehension",
-        "dictionary_comprehension",
-        "generator_expression",
-    ],
-    class_scope_kinds: &["class_definition"],
-    identifier_kinds: &["identifier"],
-    declared_idents: python::declared_idents,
-    resolution: Resolution::Hoisted,
-    is_reference: python::is_reference,
-    escapes_scope: python::escapes_scope,
-    binds_past: python::binds_past,
-    unifies_declarations: never_unifies_declarations,
-};
+struct PythonRules;
+impl LanguageBindingRule for PythonRules {
+    fn scope_kinds(&self) -> &'static [&'static str] {
+        &[
+            "function_definition",
+            "lambda",
+            "class_definition",
+            "list_comprehension",
+            "set_comprehension",
+            "dictionary_comprehension",
+            "generator_expression",
+        ]
+    }
+    fn class_scope_kinds(&self) -> &'static [&'static str] {
+        &["class_definition"]
+    }
+    fn identifier_kinds(&self) -> &'static [&'static str] {
+        &["identifier"]
+    }
+    fn declared_idents<'a>(&self, node: Node<'a>, src: &[u8]) -> Vec<Node<'a>> {
+        python::declared_idents(node, src)
+    }
+    fn resolution(&self) -> Resolution {
+        Resolution::Hoisted
+    }
+    fn is_reference(&self, node: Node<'_>) -> bool {
+        python::is_reference(node)
+    }
+    fn escapes_scope(&self, node: Node<'_>) -> bool {
+        python::escapes_scope(node)
+    }
+    fn binds_past(&self, node: Node<'_>, scope_kind: &str) -> bool {
+        python::binds_past(node, scope_kind)
+    }
+}
 
-static TYPESCRIPT_TABLE: BindingTable = BindingTable {
-    scope_kinds: &[
-        "statement_block",
-        "function_declaration",
-        "function_expression",
-        "generator_function_declaration",
-        "arrow_function",
-        "method_definition",
-        "class_declaration",
-        "for_statement",
-        "for_in_statement",
-        "catch_clause",
-    ],
-    class_scope_kinds: &["class_declaration"],
-    identifier_kinds: &[
-        "identifier",
-        "shorthand_property_identifier",
-        "shorthand_property_identifier_pattern",
-    ],
-    declared_idents: typescript::declared_idents,
-    resolution: Resolution::Lexical,
-    is_reference: typescript::is_reference,
-    escapes_scope: typescript::is_hoisted_name,
-    binds_past: typescript::binds_past,
-    unifies_declarations: typescript::is_var_binding,
-};
+struct TypeScriptRules;
+impl LanguageBindingRule for TypeScriptRules {
+    fn scope_kinds(&self) -> &'static [&'static str] {
+        &[
+            "statement_block",
+            "function_declaration",
+            "function_expression",
+            "generator_function_declaration",
+            "arrow_function",
+            "method_definition",
+            "class_declaration",
+            "for_statement",
+            "for_in_statement",
+            "catch_clause",
+        ]
+    }
+    fn class_scope_kinds(&self) -> &'static [&'static str] {
+        &["class_declaration"]
+    }
+    fn identifier_kinds(&self) -> &'static [&'static str] {
+        &[
+            "identifier",
+            "shorthand_property_identifier",
+            "shorthand_property_identifier_pattern",
+        ]
+    }
+    fn declared_idents<'a>(&self, node: Node<'a>, src: &[u8]) -> Vec<Node<'a>> {
+        typescript::declared_idents(node, src)
+    }
+    fn is_reference(&self, node: Node<'_>) -> bool {
+        typescript::is_reference(node)
+    }
+    fn escapes_scope(&self, node: Node<'_>) -> bool {
+        typescript::is_hoisted_name(node)
+    }
+    fn binds_past(&self, node: Node<'_>, scope_kind: &str) -> bool {
+        typescript::binds_past(node, scope_kind)
+    }
+    fn unifies_declarations(&self, node: Node<'_>) -> bool {
+        typescript::is_var_binding(node)
+    }
+}
 
-static VIMSCRIPT_TABLE: BindingTable = BindingTable {
-    scope_kinds: &[
-        "function_definition",
-        "lambda_expression",
-        "if_statement",
-        "while_loop",
-        "for_loop",
-        "try_statement",
-    ],
-    class_scope_kinds: &[],
-    identifier_kinds: &["identifier", "name"],
-    declared_idents: vimscript::declared_idents,
-    resolution: Resolution::Lexical,
-    is_reference: vimscript::is_reference,
-    escapes_scope: vimscript::escapes_scope,
-    binds_past: never_binds_past,
-    unifies_declarations: never_unifies_declarations,
-};
+struct VimscriptRules;
+impl LanguageBindingRule for VimscriptRules {
+    fn scope_kinds(&self) -> &'static [&'static str] {
+        &[
+            "function_definition",
+            "lambda_expression",
+            "if_statement",
+            "while_loop",
+            "for_loop",
+            "try_statement",
+        ]
+    }
+    fn identifier_kinds(&self) -> &'static [&'static str] {
+        &["identifier", "name"]
+    }
+    fn declared_idents<'a>(&self, node: Node<'a>, src: &[u8]) -> Vec<Node<'a>> {
+        vimscript::declared_idents(node, src)
+    }
+    fn is_reference(&self, node: Node<'_>) -> bool {
+        vimscript::is_reference(node)
+    }
+    fn escapes_scope(&self, node: Node<'_>) -> bool {
+        vimscript::escapes_scope(node)
+    }
+}
 
-static GO_TABLE: BindingTable = BindingTable {
-    scope_kinds: &[
-        "block",
-        "function_declaration",
-        "method_declaration",
-        "func_literal",
-        "for_statement",
-        "if_statement",
-        "expression_switch_statement",
-        "type_switch_statement",
-        "select_statement",
-        "expression_case",
-        "default_case",
-        "type_case",
-        "communication_case",
-    ],
-    class_scope_kinds: &[],
-    identifier_kinds: &["identifier"],
-    declared_idents: go::declared_idents,
-    resolution: Resolution::Lexical,
-    is_reference: go::is_reference,
-    escapes_scope: never_escapes,
-    binds_past: never_binds_past,
-    unifies_declarations: never_unifies_declarations,
-};
+struct GoRules;
+impl LanguageBindingRule for GoRules {
+    fn scope_kinds(&self) -> &'static [&'static str] {
+        &[
+            "block",
+            "function_declaration",
+            "method_declaration",
+            "func_literal",
+            "for_statement",
+            "if_statement",
+            "expression_switch_statement",
+            "type_switch_statement",
+            "select_statement",
+            "expression_case",
+            "default_case",
+            "type_case",
+            "communication_case",
+        ]
+    }
+    fn identifier_kinds(&self) -> &'static [&'static str] {
+        &["identifier"]
+    }
+    fn declared_idents<'a>(&self, node: Node<'a>, src: &[u8]) -> Vec<Node<'a>> {
+        go::declared_idents(node, src)
+    }
+    fn is_reference(&self, node: Node<'_>) -> bool {
+        go::is_reference(node)
+    }
+}
 
-static JAVA_TABLE: BindingTable = BindingTable {
-    scope_kinds: &[
-        "block",
-        "method_declaration",
-        "constructor_declaration",
-        "lambda_expression",
-        "for_statement",
-        "enhanced_for_statement",
-        "catch_clause",
-    ],
-    class_scope_kinds: &[],
-    identifier_kinds: &["identifier"],
-    declared_idents: java::declared_idents,
-    resolution: Resolution::Lexical,
-    is_reference: java::is_reference,
-    escapes_scope: never_escapes,
-    binds_past: never_binds_past,
-    unifies_declarations: never_unifies_declarations,
-};
+struct JavaRules;
+impl LanguageBindingRule for JavaRules {
+    fn scope_kinds(&self) -> &'static [&'static str] {
+        &[
+            "block",
+            "method_declaration",
+            "constructor_declaration",
+            "lambda_expression",
+            "for_statement",
+            "enhanced_for_statement",
+            "catch_clause",
+        ]
+    }
+    fn identifier_kinds(&self) -> &'static [&'static str] {
+        &["identifier"]
+    }
+    fn declared_idents<'a>(&self, node: Node<'a>, src: &[u8]) -> Vec<Node<'a>> {
+        java::declared_idents(node, src)
+    }
+    fn is_reference(&self, node: Node<'_>) -> bool {
+        java::is_reference(node)
+    }
+}
 
-static SWIFT_TABLE: BindingTable = BindingTable {
-    scope_kinds: &[
-        "function_declaration",
-        "init_declaration",
-        "function_body",
-        "lambda_literal",
-        "for_statement",
-        "statements",
-    ],
-    class_scope_kinds: &[],
-    identifier_kinds: &["simple_identifier"],
-    declared_idents: swift::declared_idents,
-    resolution: Resolution::Lexical,
-    is_reference: swift::is_reference,
-    escapes_scope: swift::escapes_scope,
-    binds_past: never_binds_past,
-    unifies_declarations: never_unifies_declarations,
-};
+struct SwiftRules;
+impl LanguageBindingRule for SwiftRules {
+    fn scope_kinds(&self) -> &'static [&'static str] {
+        &[
+            "function_declaration",
+            "init_declaration",
+            "function_body",
+            "lambda_literal",
+            "for_statement",
+            "statements",
+        ]
+    }
+    fn identifier_kinds(&self) -> &'static [&'static str] {
+        &["simple_identifier"]
+    }
+    fn declared_idents<'a>(&self, node: Node<'a>, src: &[u8]) -> Vec<Node<'a>> {
+        swift::declared_idents(node, src)
+    }
+    fn is_reference(&self, node: Node<'_>) -> bool {
+        swift::is_reference(node)
+    }
+    fn escapes_scope(&self, node: Node<'_>) -> bool {
+        swift::escapes_scope(node)
+    }
+}
 
-static CSHARP_TABLE: BindingTable = BindingTable {
-    scope_kinds: &[
-        "block",
-        "method_declaration",
-        "constructor_declaration",
-        "if_statement",
-        "switch_statement",
-        "while_statement",
-        "for_statement",
-        "foreach_statement",
-        "catch_clause",
-        "lambda_expression",
-        "using_statement",
-        "lock_statement",
-        "checked_statement",
-        "unsafe_statement",
-        "fixed_statement",
-    ],
-    class_scope_kinds: &["class_declaration"],
-    identifier_kinds: &["identifier"],
-    declared_idents: csharp::declared_idents,
-    resolution: Resolution::Lexical,
-    is_reference: csharp::is_reference,
-    escapes_scope: never_escapes,
-    binds_past: never_binds_past,
-    unifies_declarations: never_unifies_declarations,
-};
+struct CSharpRules;
+impl LanguageBindingRule for CSharpRules {
+    fn scope_kinds(&self) -> &'static [&'static str] {
+        &[
+            "block",
+            "method_declaration",
+            "constructor_declaration",
+            "if_statement",
+            "switch_statement",
+            "while_statement",
+            "for_statement",
+            "foreach_statement",
+            "catch_clause",
+            "lambda_expression",
+            "using_statement",
+            "lock_statement",
+            "checked_statement",
+            "unsafe_statement",
+            "fixed_statement",
+        ]
+    }
+    fn class_scope_kinds(&self) -> &'static [&'static str] {
+        &["class_declaration"]
+    }
+    fn identifier_kinds(&self) -> &'static [&'static str] {
+        &["identifier"]
+    }
+    fn declared_idents<'a>(&self, node: Node<'a>, src: &[u8]) -> Vec<Node<'a>> {
+        csharp::declared_idents(node, src)
+    }
+    fn is_reference(&self, node: Node<'_>) -> bool {
+        csharp::is_reference(node)
+    }
+}
+
+static RUST_RULES: RustRules = RustRules;
+static CPP_RULES: CppRules = CppRules;
+static PYTHON_RULES: PythonRules = PythonRules;
+static GO_RULES: GoRules = GoRules;
+static JAVA_RULES: JavaRules = JavaRules;
+static TYPESCRIPT_RULES: TypeScriptRules = TypeScriptRules;
+static CSHARP_RULES: CSharpRules = CSharpRules;
+static SWIFT_RULES: SwiftRules = SwiftRules;
+static VIMSCRIPT_RULES: VimscriptRules = VimscriptRules;
