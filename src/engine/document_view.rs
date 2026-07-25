@@ -21,13 +21,9 @@ pub(crate) struct Selection<'a> {
 }
 
 pub(crate) fn select(document: &Document, selection: Selection<'_>) -> Result<Document> {
-    let by_id: HashMap<&str, &Node> = document
-        .nodes
-        .iter()
-        .map(|node| (node.id.as_str(), node))
-        .collect();
+    let index = DocumentTreeIndex::new(&document.nodes);
     if let Some(root) = selection.node {
-        let Some(root_node) = by_id.get(root) else {
+        let Some(root_node) = index.get(root) else {
             bail!("node {root} not found");
         };
         if selection.outline && root_node.kind != NodeKind::Section {
@@ -58,7 +54,7 @@ pub(crate) fn select(document: &Document, selection: Selection<'_>) -> Result<Do
         .filter(|node| {
             if let Some(root) = selection.node
                 && node.id != root
-                && !is_descendant(node, root, &by_id)
+                && !index.is_descendant(node, root)
             {
                 return false;
             }
@@ -84,12 +80,8 @@ pub(crate) fn select(document: &Document, selection: Selection<'_>) -> Result<Do
         .collect();
     detach_missing_parents(&mut nodes);
     if let Some(max_depth) = selection.depth {
-        let by_id: HashMap<&str, &Node> =
-            nodes.iter().map(|node| (node.id.as_str(), node)).collect();
-        let depths: HashMap<String, usize> = nodes
-            .iter()
-            .map(|node| (node.id.clone(), node_depth(&node.id, &by_id)))
-            .collect();
+        let filtered_index = DocumentTreeIndex::new(&nodes);
+        let depths = filtered_index.node_depths(&nodes);
         nodes.retain(|node| {
             depths
                 .get(&node.id)
@@ -199,7 +191,8 @@ pub(crate) fn render(document: &Document) -> String {
         return output;
     }
 
-    let depths = node_depths(document);
+    let index = DocumentTreeIndex::new(&document.nodes);
+    let depths = index.node_depths(&document.nodes);
     let minimum_depth = depths.values().copied().min().unwrap_or_default();
     for node in &document.nodes {
         let depth = depths
@@ -249,48 +242,53 @@ fn compact_text(text: &str) -> String {
     compact
 }
 
-fn is_descendant(node: &Node, root: &str, by_id: &HashMap<&str, &Node>) -> bool {
-    let mut visited = HashSet::new();
-    let mut parent = node.parent_id.as_deref();
-    while let Some(parent_id) = parent {
-        if parent_id == root {
-            return true;
-        }
-        if !visited.insert(parent_id) {
-            break;
-        }
-        parent = by_id
-            .get(parent_id)
-            .and_then(|parent_node| parent_node.parent_id.as_deref());
-    }
-    false
+pub(crate) struct DocumentTreeIndex<'a> {
+    by_id: HashMap<&'a str, &'a Node>,
 }
 
-fn node_depth(id: &str, by_id: &HashMap<&str, &Node>) -> usize {
-    let mut depth = 0;
-    let mut visited = HashSet::new();
-    let mut parent = by_id.get(id).and_then(|node| node.parent_id.as_deref());
-    while let Some(parent_id) = parent {
-        if !visited.insert(parent_id) {
-            break;
-        }
-        depth += 1;
-        parent = by_id
-            .get(parent_id)
-            .and_then(|parent_node| parent_node.parent_id.as_deref());
+impl<'a> DocumentTreeIndex<'a> {
+    pub(crate) fn new(nodes: &'a [Node]) -> Self {
+        let by_id = nodes.iter().map(|node| (node.id.as_str(), node)).collect();
+        Self { by_id }
     }
-    depth
-}
 
-fn node_depths(document: &Document) -> HashMap<String, usize> {
-    let by_id: HashMap<&str, &Node> = document
-        .nodes
-        .iter()
-        .map(|node| (node.id.as_str(), node))
-        .collect();
-    document
-        .nodes
-        .iter()
-        .map(|node| (node.id.clone(), node_depth(&node.id, &by_id)))
-        .collect()
+    pub(crate) fn get(&self, id: &str) -> Option<&'a Node> {
+        self.by_id.get(id).copied()
+    }
+
+    pub(crate) fn is_descendant(&self, node: &Node, root: &str) -> bool {
+        let mut visited = HashSet::new();
+        let mut parent = node.parent_id.as_deref();
+        while let Some(parent_id) = parent {
+            if parent_id == root {
+                return true;
+            }
+            if !visited.insert(parent_id) {
+                break;
+            }
+            parent = self.get(parent_id).and_then(|n| n.parent_id.as_deref());
+        }
+        false
+    }
+
+    pub(crate) fn depth(&self, id: &str) -> usize {
+        let mut depth = 0;
+        let mut visited = HashSet::new();
+        let mut parent = self.get(id).and_then(|n| n.parent_id.as_deref());
+        while let Some(parent_id) = parent {
+            if !visited.insert(parent_id) {
+                break;
+            }
+            depth += 1;
+            parent = self.get(parent_id).and_then(|n| n.parent_id.as_deref());
+        }
+        depth
+    }
+
+    pub(crate) fn node_depths(&self, nodes: &[Node]) -> HashMap<String, usize> {
+        nodes
+            .iter()
+            .map(|node| (node.id.clone(), self.depth(&node.id)))
+            .collect()
+    }
 }
