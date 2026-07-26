@@ -27,10 +27,16 @@ jobs:
         with:
           toolchain: stable
           targets: aarch64-linux-android
+      - name: Configure Cargo for NDK Linker
+        run: |
+          mkdir -p .cargo
+          cat << 'EOF' > .cargo/config.toml
+          [target.aarch64-linux-android]
+          linker = "aarch64-linux-android24-clang"
+          EOF
       - name: Build readseek executable
         run: |
-          export CC_aarch64_linux_android="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
-          export AR_aarch64_linux_android="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          export PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           cargo build --release --target aarch64-linux-android
       - name: Prepare NPM package directory & Tarball
         run: |
