@@ -38,22 +38,16 @@ jobs:
         run: |
           export PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           cargo build --release --target aarch64-linux-android
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
       - name: Build pi-readseek TS to JS
         run: |
           cd packages/pi-readseek
-          npm install
-          npx tsc index.ts --outDir dist --target es2022 --module commonjs --allowJs --skipLibCheck || true
-          cat << 'EOF' > patch.py
-          import json
-          with open('package.json', 'r') as f:
-              pkg = json.load(f)
-          pkg['exports']['.'] = './dist/index.js'
-          pkg['pi']['extensions'] = ['./dist/index.js']
-          with open('package.json', 'w') as f:
-              json.dump(pkg, f, indent=2)
-          EOF
-          python3 patch.py
-          npm pack
+          npm install --ignore-scripts
+          bun run build
+          npm pack --ignore-scripts
           mv *.tgz ../../pi-readseek-0.8.11-android.1.tgz
       - name: Prepare NPM package directory & Tarball
         run: |
