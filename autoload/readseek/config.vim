@@ -3,7 +3,7 @@
 
 vim9script
 
-export const PluginVersion = '0.8.11'
+export const PluginVersion = '0.8.12'
 const HealthCacheKey = 'readseek_health'
 
 export def Initialize()
