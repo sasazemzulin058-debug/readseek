@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown: # applies only to version-updates (security-updates will be suggested immediately)
+      default-days: 10
+      semver-minor-days: 14 # wait 14 days before applying minor updates
+      semver-major-days: 28
+  - package-ecosystem: npm
+    directory: /packages/pi-readseek
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /packages/opencode-readseek
+    schedule:
+      interval: weekly
