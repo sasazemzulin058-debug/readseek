@@ -49,6 +49,52 @@ pub(crate) fn fp16_to_f32(value: u16) -> f32 {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "f16c")]
+unsafe fn fp16_single_to_f32_f16c(bytes: &[u8]) -> f32 {
+    use std::arch::x86_64::{_mm_cvtph_ps, _mm_cvtsi32_si128, _mm_cvtss_f32};
+
+    let bits = i32::from(u16::from_le_bytes([bytes[0], bytes[1]]));
+    _mm_cvtss_f32(_mm_cvtph_ps(_mm_cvtsi32_si128(bits)))
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "f16c")]
+unsafe fn fp16_pair_to_f32_f16c(bytes: &[u8]) -> (f32, f32) {
+    use std::arch::x86_64::{_mm_cvtph_ps, _mm_cvtsi32_si128, _mm_cvtss_f32, _mm_shuffle_ps};
+
+    let bits = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let converted = _mm_cvtph_ps(_mm_cvtsi32_si128(bits));
+    (
+        _mm_cvtss_f32(converted),
+        _mm_cvtss_f32(_mm_shuffle_ps::<0x55>(converted, converted)),
+    )
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "f16c")]
+unsafe fn q8_0_four_scales_f16c(blocks: &[u8]) -> [f32; 4] {
+    use std::arch::x86_64::{_mm_cvtph_ps, _mm_cvtsi64_si128, _mm_storeu_ps};
+
+    let packed = u64::from(u16::from_le_bytes([blocks[0], blocks[1]]))
+        | (u64::from(u16::from_le_bytes([
+            blocks[Q8_0_BLOCK_BYTES],
+            blocks[Q8_0_BLOCK_BYTES + 1],
+        ])) << 16)
+        | (u64::from(u16::from_le_bytes([
+            blocks[Q8_0_BLOCK_BYTES * 2],
+            blocks[Q8_0_BLOCK_BYTES * 2 + 1],
+        ])) << 32)
+        | (u64::from(u16::from_le_bytes([
+            blocks[Q8_0_BLOCK_BYTES * 3],
+            blocks[Q8_0_BLOCK_BYTES * 3 + 1],
+        ])) << 48);
+    let converted = _mm_cvtph_ps(_mm_cvtsi64_si128(packed.cast_signed()));
+    let mut scales = [0.0_f32; 4];
+    unsafe { _mm_storeu_ps(scales.as_mut_ptr(), converted) };
+    scales
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Fp16AttentionKernel {
     Scalar,
@@ -415,6 +461,8 @@ enum KDotKernel {
     Scalar,
     #[cfg(target_arch = "x86_64")]
     Avx2,
+    #[cfg(target_arch = "x86_64")]
+    Avx2F16c,
 }
 
 impl KDotKernel {
@@ -423,6 +471,9 @@ impl KDotKernel {
         *KERNEL.get_or_init(|| {
             #[cfg(target_arch = "x86_64")]
             if std::is_x86_feature_detected!("avx2") {
+                if std::is_x86_feature_detected!("f16c") {
+                    return Self::Avx2F16c;
+                }
                 return Self::Avx2;
             }
             Self::Scalar
@@ -437,6 +488,14 @@ impl KDotKernel {
             (Self::Avx2, TensorType::Q4K) => unsafe { dot_q4_k_q8_k_avx2(row, activation) },
             #[cfg(target_arch = "x86_64")]
             (Self::Avx2, TensorType::Q6K) => unsafe { dot_q6_k_q8_k_avx2(row, activation) },
+            #[cfg(target_arch = "x86_64")]
+            (Self::Avx2F16c, TensorType::Q4K) => unsafe {
+                dot_q4_k_q8_k_avx2_f16c(row, activation)
+            },
+            #[cfg(target_arch = "x86_64")]
+            (Self::Avx2F16c, TensorType::Q6K) => unsafe {
+                dot_q6_k_q8_k_avx2_f16c(row, activation)
+            },
             (_, kind) => unreachable!("unsupported K-quantized tensor type {kind:?}"),
         }
     }
@@ -665,6 +724,160 @@ unsafe fn dot_q6_k_q8_k_avx2(row: &[u8], activation: &Q8KActivation) -> f32 {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,f16c")]
+unsafe fn dot_q4_k_q8_k_avx2_f16c(row: &[u8], activation: &Q8KActivation) -> f32 {
+    use std::arch::x86_64::{
+        _mm256_add_epi32, _mm256_and_si256, _mm256_loadu_si256, _mm256_madd_epi16,
+        _mm256_maddubs_epi16, _mm256_set1_epi8, _mm256_set1_epi16, _mm256_setzero_si256,
+        _mm256_srli_epi16,
+    };
+
+    let mask = _mm256_set1_epi8(0x0f);
+    let mut sum = 0.0;
+    for (block_index, block) in row.chunks_exact(Q4_K_BLOCK_BYTES).enumerate() {
+        let (weight_scale, weight_minimum) = unsafe { fp16_pair_to_f32_f16c(block) };
+        let scale = activation.scales[block_index] * weight_scale;
+        let minimum = -activation.scales[block_index] * weight_minimum;
+        let scales = &block[4..16];
+        let quantized = &block[16..];
+        let values = &activation.values[block_index * K_BLOCK_VALUES..][..K_BLOCK_VALUES];
+        let sums = &activation.sums[block_index * 16..][..16];
+        let mut product_sums = _mm256_setzero_si256();
+        let mut minimum_sum = 0_i32;
+        for group in 0..8 {
+            let (group_scale, group_minimum) = q4_k_scale_min(scales, group);
+            minimum_sum += i32::from(group_minimum)
+                * (i32::from(sums[group * 2]) + i32::from(sums[group * 2 + 1]));
+            let packed =
+                unsafe { _mm256_loadu_si256(quantized.as_ptr().add(group / 2 * 32).cast()) };
+            let unpacked = if group % 2 == 0 {
+                _mm256_and_si256(packed, mask)
+            } else {
+                _mm256_and_si256(_mm256_srli_epi16::<4>(packed), mask)
+            };
+            let activation_values =
+                unsafe { _mm256_loadu_si256(values.as_ptr().add(group * 32).cast()) };
+            let pairs = _mm256_maddubs_epi16(unpacked, activation_values);
+            let group_scales = _mm256_set1_epi16(i16::from(group_scale));
+            product_sums = _mm256_add_epi32(product_sums, _mm256_madd_epi16(pairs, group_scales));
+        }
+        let product_sum = unsafe { horizontal_sum_i32_avx2(product_sums) };
+        sum += scale * product_sum.to_f32().unwrap_or(0.0)
+            + minimum * minimum_sum.to_f32().unwrap_or(0.0);
+    }
+    sum
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,f16c")]
+unsafe fn dot_q6_k_q8_k_avx2_f16c(row: &[u8], activation: &Q8KActivation) -> f32 {
+    use std::arch::x86_64::{
+        _mm_loadl_epi64, _mm256_add_epi32, _mm256_and_si256, _mm256_cvtepi8_epi32,
+        _mm256_loadu_si256, _mm256_or_si256, _mm256_permutevar8x32_epi32, _mm256_set1_epi8,
+        _mm256_setr_epi32, _mm256_setzero_si256, _mm256_slli_epi16, _mm256_srli_epi16,
+        _mm256_sub_epi8,
+    };
+
+    let low_mask = _mm256_set1_epi8(0x0f);
+    let high_mask = _mm256_set1_epi8(0x03);
+    let upper_high_mask = _mm256_set1_epi8(0x30);
+    let offset = _mm256_set1_epi8(32);
+    let scale_01_indices = _mm256_setr_epi32(0, 0, 0, 0, 1, 1, 1, 1);
+    let scale_23_indices = _mm256_setr_epi32(2, 2, 2, 2, 3, 3, 3, 3);
+    let scale_45_indices = _mm256_setr_epi32(4, 4, 4, 4, 5, 5, 5, 5);
+    let scale_67_indices = _mm256_setr_epi32(6, 6, 6, 6, 7, 7, 7, 7);
+    let mut sum = 0.0;
+    for (block_index, block) in row.chunks_exact(Q6_K_BLOCK_BYTES).enumerate() {
+        let low = &block[..128];
+        let high = &block[128..192];
+        let scales = &block[192..208];
+        let scale =
+            activation.scales[block_index] * unsafe { fp16_single_to_f32_f16c(&block[208..210]) };
+        let values = &activation.values[block_index * K_BLOCK_VALUES..][..K_BLOCK_VALUES];
+        let mut product_sums = _mm256_setzero_si256();
+        for half in 0..2 {
+            let low = &low[half * 64..];
+            let high = &high[half * 32..];
+            let scales = &scales[half * 8..];
+            let values = &values[half * 128..];
+            let low_first = unsafe { _mm256_loadu_si256(low.as_ptr().cast()) };
+            let low_second = unsafe { _mm256_loadu_si256(low.as_ptr().add(32).cast()) };
+            let high = unsafe { _mm256_loadu_si256(high.as_ptr().cast()) };
+            let scale_bytes = unsafe { _mm_loadl_epi64(scales.as_ptr().cast()) };
+            let scale_lanes = _mm256_cvtepi8_epi32(scale_bytes);
+
+            let weights = _mm256_sub_epi8(
+                _mm256_or_si256(
+                    _mm256_and_si256(low_first, low_mask),
+                    _mm256_slli_epi16::<4>(_mm256_and_si256(high, high_mask)),
+                ),
+                offset,
+            );
+            let activation_values = unsafe { _mm256_loadu_si256(values.as_ptr().cast()) };
+            product_sums = _mm256_add_epi32(product_sums, unsafe {
+                scaled_dot_i8_i8_avx2(
+                    weights,
+                    activation_values,
+                    _mm256_permutevar8x32_epi32(scale_lanes, scale_01_indices),
+                )
+            });
+
+            let high_shifted = _mm256_srli_epi16::<2>(high);
+            let weights = _mm256_sub_epi8(
+                _mm256_or_si256(
+                    _mm256_and_si256(low_second, low_mask),
+                    _mm256_slli_epi16::<4>(_mm256_and_si256(high_shifted, high_mask)),
+                ),
+                offset,
+            );
+            let activation_values = unsafe { _mm256_loadu_si256(values.as_ptr().add(32).cast()) };
+            product_sums = _mm256_add_epi32(product_sums, unsafe {
+                scaled_dot_i8_i8_avx2(
+                    weights,
+                    activation_values,
+                    _mm256_permutevar8x32_epi32(scale_lanes, scale_23_indices),
+                )
+            });
+
+            let weights = _mm256_sub_epi8(
+                _mm256_or_si256(
+                    _mm256_and_si256(_mm256_srli_epi16::<4>(low_first), low_mask),
+                    _mm256_and_si256(high, upper_high_mask),
+                ),
+                offset,
+            );
+            let activation_values = unsafe { _mm256_loadu_si256(values.as_ptr().add(64).cast()) };
+            product_sums = _mm256_add_epi32(product_sums, unsafe {
+                scaled_dot_i8_i8_avx2(
+                    weights,
+                    activation_values,
+                    _mm256_permutevar8x32_epi32(scale_lanes, scale_45_indices),
+                )
+            });
+
+            let weights = _mm256_sub_epi8(
+                _mm256_or_si256(
+                    _mm256_and_si256(_mm256_srli_epi16::<4>(low_second), low_mask),
+                    _mm256_and_si256(high_shifted, upper_high_mask),
+                ),
+                offset,
+            );
+            let activation_values = unsafe { _mm256_loadu_si256(values.as_ptr().add(96).cast()) };
+            product_sums = _mm256_add_epi32(product_sums, unsafe {
+                scaled_dot_i8_i8_avx2(
+                    weights,
+                    activation_values,
+                    _mm256_permutevar8x32_epi32(scale_lanes, scale_67_indices),
+                )
+            });
+        }
+        let product_sum = unsafe { horizontal_sum_i32_avx2(product_sums) };
+        sum += scale * product_sum.to_f32().unwrap_or(0.0);
+    }
+    sum
+}
+
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn scaled_dot_i8_i8_avx2(
     left: std::arch::x86_64::__m256i,
@@ -742,6 +955,8 @@ enum Q8DotKernel {
     Scalar,
     #[cfg(target_arch = "x86_64")]
     Avx2Fma,
+    #[cfg(target_arch = "x86_64")]
+    Avx2FmaF16c,
     #[cfg(target_arch = "aarch64")]
     Neon,
 }
@@ -753,6 +968,9 @@ impl Q8DotKernel {
         *KERNEL.get_or_init(|| {
             #[cfg(target_arch = "x86_64")]
             if std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
+                if std::is_x86_feature_detected!("f16c") {
+                    return Self::Avx2FmaF16c;
+                }
                 return Self::Avx2Fma;
             }
             #[cfg(target_arch = "aarch64")]
@@ -771,6 +989,11 @@ impl Q8DotKernel {
             Self::Avx2Fma => {
                 // The variant is only constructed after runtime AVX2 and FMA detection.
                 unsafe { dot_q8_0_quantized_avx2_fma(row, activation) }
+            }
+            #[cfg(target_arch = "x86_64")]
+            Self::Avx2FmaF16c => {
+                // The variant is only constructed after runtime AVX2, FMA, and F16C detection.
+                unsafe { dot_q8_0_quantized_avx2_fma_f16c(row, activation) }
             }
             #[cfg(target_arch = "aarch64")]
             Self::Neon => unsafe { dot_q8_0_quantized_neon(row, activation) },
@@ -861,12 +1084,25 @@ unsafe fn dot_q8_0_quantized_avx2_fma(row: &[u8], activation: &Q8Activation) -> 
         .zip(value_groups.by_ref())
         .zip(scale_groups.by_ref())
     {
+        let scale_0 = fp16_to_f32(u16::from_le_bytes([blocks[0], blocks[1]])) * scales[0];
+        let scale_1 = fp16_to_f32(u16::from_le_bytes([
+            blocks[Q8_0_BLOCK_BYTES],
+            blocks[Q8_0_BLOCK_BYTES + 1],
+        ])) * scales[1];
+        let scale_2 = fp16_to_f32(u16::from_le_bytes([
+            blocks[Q8_0_BLOCK_BYTES * 2],
+            blocks[Q8_0_BLOCK_BYTES * 2 + 1],
+        ])) * scales[2];
+        let scale_3 = fp16_to_f32(u16::from_le_bytes([
+            blocks[Q8_0_BLOCK_BYTES * 3],
+            blocks[Q8_0_BLOCK_BYTES * 3 + 1],
+        ])) * scales[3];
         sum_0 = unsafe {
             accumulate_q8_0_block_avx2_fma(
                 sum_0,
                 &blocks[..Q8_0_BLOCK_BYTES],
                 &values[..Q8_0_BLOCK_VALUES],
-                scales[0],
+                scale_0,
                 ones,
             )
         };
@@ -875,7 +1111,7 @@ unsafe fn dot_q8_0_quantized_avx2_fma(row: &[u8], activation: &Q8Activation) -> 
                 sum_1,
                 &blocks[Q8_0_BLOCK_BYTES..Q8_0_BLOCK_BYTES * 2],
                 &values[Q8_0_BLOCK_VALUES..Q8_0_BLOCK_VALUES * 2],
-                scales[1],
+                scale_1,
                 ones,
             )
         };
@@ -884,7 +1120,7 @@ unsafe fn dot_q8_0_quantized_avx2_fma(row: &[u8], activation: &Q8Activation) -> 
                 sum_2,
                 &blocks[Q8_0_BLOCK_BYTES * 2..Q8_0_BLOCK_BYTES * 3],
                 &values[Q8_0_BLOCK_VALUES * 2..Q8_0_BLOCK_VALUES * 3],
-                scales[2],
+                scale_2,
                 ones,
             )
         };
@@ -893,7 +1129,7 @@ unsafe fn dot_q8_0_quantized_avx2_fma(row: &[u8], activation: &Q8Activation) -> 
                 sum_3,
                 &blocks[Q8_0_BLOCK_BYTES * 3..],
                 &values[Q8_0_BLOCK_VALUES * 3..],
-                scales[3],
+                scale_3,
                 ones,
             )
         };
@@ -905,9 +1141,84 @@ unsafe fn dot_q8_0_quantized_avx2_fma(row: &[u8], activation: &Q8Activation) -> 
         .zip(value_groups.remainder().chunks_exact(Q8_0_BLOCK_VALUES))
         .zip(scale_groups.remainder())
     {
+        let scale = fp16_to_f32(u16::from_le_bytes([block[0], block[1]])) * activation_scale;
+        sum_0 = unsafe { accumulate_q8_0_block_avx2_fma(sum_0, block, values, scale, ones) };
+    }
+
+    let sums = _mm256_add_ps(_mm256_add_ps(sum_0, sum_1), _mm256_add_ps(sum_2, sum_3));
+    let mut lanes = [0.0_f32; 8];
+    unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), sums) };
+    lanes.into_iter().sum()
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma,f16c")]
+unsafe fn dot_q8_0_quantized_avx2_fma_f16c(row: &[u8], activation: &Q8Activation) -> f32 {
+    use std::arch::x86_64::{
+        _mm256_add_ps, _mm256_set1_epi16, _mm256_setzero_ps, _mm256_storeu_ps,
+    };
+
+    let ones = _mm256_set1_epi16(1);
+    let mut sum_0 = _mm256_setzero_ps();
+    let mut sum_1 = _mm256_setzero_ps();
+    let mut sum_2 = _mm256_setzero_ps();
+    let mut sum_3 = _mm256_setzero_ps();
+    let mut block_groups = row.chunks_exact(Q8_0_BLOCK_BYTES * 4);
+    let mut value_groups = activation.values.chunks_exact(Q8_0_BLOCK_VALUES * 4);
+    let mut scale_groups = activation.scales.chunks_exact(4);
+
+    for ((blocks, values), scales) in block_groups
+        .by_ref()
+        .zip(value_groups.by_ref())
+        .zip(scale_groups.by_ref())
+    {
+        let weight_scales = unsafe { q8_0_four_scales_f16c(blocks) };
         sum_0 = unsafe {
-            accumulate_q8_0_block_avx2_fma(sum_0, block, values, *activation_scale, ones)
+            accumulate_q8_0_block_avx2_fma(
+                sum_0,
+                &blocks[..Q8_0_BLOCK_BYTES],
+                &values[..Q8_0_BLOCK_VALUES],
+                weight_scales[0] * scales[0],
+                ones,
+            )
         };
+        sum_1 = unsafe {
+            accumulate_q8_0_block_avx2_fma(
+                sum_1,
+                &blocks[Q8_0_BLOCK_BYTES..Q8_0_BLOCK_BYTES * 2],
+                &values[Q8_0_BLOCK_VALUES..Q8_0_BLOCK_VALUES * 2],
+                weight_scales[1] * scales[1],
+                ones,
+            )
+        };
+        sum_2 = unsafe {
+            accumulate_q8_0_block_avx2_fma(
+                sum_2,
+                &blocks[Q8_0_BLOCK_BYTES * 2..Q8_0_BLOCK_BYTES * 3],
+                &values[Q8_0_BLOCK_VALUES * 2..Q8_0_BLOCK_VALUES * 3],
+                weight_scales[2] * scales[2],
+                ones,
+            )
+        };
+        sum_3 = unsafe {
+            accumulate_q8_0_block_avx2_fma(
+                sum_3,
+                &blocks[Q8_0_BLOCK_BYTES * 3..],
+                &values[Q8_0_BLOCK_VALUES * 3..],
+                weight_scales[3] * scales[3],
+                ones,
+            )
+        };
+    }
+
+    for ((block, values), activation_scale) in block_groups
+        .remainder()
+        .chunks_exact(Q8_0_BLOCK_BYTES)
+        .zip(value_groups.remainder().chunks_exact(Q8_0_BLOCK_VALUES))
+        .zip(scale_groups.remainder())
+    {
+        let scale = unsafe { fp16_single_to_f32_f16c(block) } * activation_scale;
+        sum_0 = unsafe { accumulate_q8_0_block_avx2_fma(sum_0, block, values, scale, ones) };
     }
 
     let sums = _mm256_add_ps(_mm256_add_ps(sum_0, sum_1), _mm256_add_ps(sum_2, sum_3));
@@ -923,7 +1234,7 @@ unsafe fn accumulate_q8_0_block_avx2_fma(
     sum: std::arch::x86_64::__m256,
     block: &[u8],
     values: &[i8],
-    activation_scale: f32,
+    scale: f32,
     ones: std::arch::x86_64::__m256i,
 ) -> std::arch::x86_64::__m256 {
     use std::arch::x86_64::{
@@ -939,8 +1250,6 @@ unsafe fn accumulate_q8_0_block_avx2_fma(
     let weight_magnitudes = _mm256_abs_epi8(weights);
     let pairs = _mm256_maddubs_epi16(weight_magnitudes, signed_activations);
     let products = _mm256_madd_epi16(pairs, ones);
-    let weight_scale = fp16_to_f32(u16::from_le_bytes([block[0], block[1]]));
-    let scale = weight_scale * activation_scale;
     _mm256_fmadd_ps(_mm256_cvtepi32_ps(products), _mm256_set1_ps(scale), sum)
 }
 
