@@ -41,7 +41,7 @@
   },
   "dependencies": {
     "@jarkkojs/readseek": "^0.8.10",
-    "diff": "^8.0.3",
+    "diff": "^9.0.0",
     "xxhash-wasm": "^1.1.0"
   },
   "peerDependencies": {
