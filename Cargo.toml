@@ -23,7 +23,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 git2 = { version = "0.20", default-features = false }
 dirs = "6"
-indicatif = "0.17"
+indicatif = "0.18"
 memchr = "2.7"
 memmap2 = "0.9"
 num-traits = "0.2"
