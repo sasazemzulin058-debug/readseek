@@ -38,6 +38,30 @@ jobs:
         run: |
           export PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           cargo build --release --target aarch64-linux-android
+      - name: Build pi-readseek TS to JS
+        run: |
+          cd packages/pi-readseek
+          npm install
+          npx tsc index.ts --outDir dist --target es2022 --module commonjs --allowJs --skipLibCheck || true
+          cat << 'EOF' > patch.py
+          import json
+          with open('dist/index.js', 'r') as f:
+              c = f.read()
+          target = 'function readSeekBinaryPath() {'
+          replacement = 'function readSeekBinaryPath() {\n  if (process.platform === "android" || process.arch === "arm64") {\n    return "/data/data/com.termux/files/usr/bin/readseek";\n  }'
+          c = c.replace(target, replacement)
+          with open('dist/index.js', 'w') as f:
+              f.write(c)
+          with open('package.json', 'r') as f:
+              pkg = json.load(f)
+          pkg['exports']['.'] = './dist/index.js'
+          pkg['pi']['extensions'] = ['./dist/index.js']
+          with open('package.json', 'w') as f:
+              json.dump(pkg, f, indent=2)
+          EOF
+          python3 patch.py
+          npm pack
+          mv *.tgz ../../pi-readseek-0.8.11-android.1.tgz
       - name: Prepare NPM package directory & Tarball
         run: |
           mkdir -p npm/readseek-android-arm64
@@ -86,4 +110,5 @@ jobs:
             ```
           files: |
             readseek-android-arm64-0.8.11-android.1.tgz
+            pi-readseek-0.8.11-android.1.tgz
             target/aarch64-linux-android/release/readseek
