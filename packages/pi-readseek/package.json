@@ -1,6 +1,6 @@
 {
   "name": "pi-readseek",
-  "version": "0.8.10",
+  "version": "0.8.11",
   "description": "Pi extension for readseek-backed hash-anchored read/edit/grep, structural code maps, structural search, and file exploration",
   "type": "module",
   "exports": {
@@ -40,7 +40,7 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@jarkkojs/readseek": "^0.8.10",
+    "@jarkkojs/readseek": "^0.8.11",
     "diff": "^9.0.0",
     "xxhash-wasm": "^1.1.0"
   },

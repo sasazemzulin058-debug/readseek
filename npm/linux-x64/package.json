@@ -1,6 +1,6 @@
 {
   "name": "@jarkkojs/readseek-linux-x64",
-  "version": "0.8.10",
+  "version": "0.8.11",
   "description": "Linux x64 binary for readseek",
   "license": "Apache-2.0 AND LGPL-2.1-or-later",
   "homepage": "https://github.com/jarkkojs/readseek#readme",
