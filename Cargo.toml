@@ -30,7 +30,7 @@ num-traits = "0.2"
 pdf_oxide = { version = "0.3.74", default-features = false }
 quick-xml = "0.41"
 rayon = "1.10"
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 strum = "0.28"
