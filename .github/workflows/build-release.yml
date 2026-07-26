@@ -29,10 +29,9 @@ jobs:
           targets: aarch64-linux-android
       - name: Build readseek executable
         run: |
+          export CC_aarch64_linux_android="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
           cargo build --release --target aarch64-linux-android
-        env:
-          CC_aarch64_linux_android: /tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-          AR_aarch64_linux_android: /tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
       - name: Prepare NPM package directory & Tarball
         run: |
           mkdir -p npm/readseek-android-arm64
