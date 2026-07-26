@@ -254,6 +254,7 @@ function readSeekPackageDir(): string {
 }
 
 const READSEEK_PLATFORM_PACKAGES: Record<string, string> = {
+	"android-arm64": "@sasazemzulin058-debug/readseek-android-arm64",
 	"darwin-arm64": "@jarkkojs/readseek-darwin-arm64",
 	"linux-arm64": "@jarkkojs/readseek-linux-arm64",
 	"linux-x64": "@jarkkojs/readseek-linux-x64",
@@ -265,6 +266,15 @@ function readSeekPlatform(): string {
 }
 
 function readSeekBinaryPath(): string {
+	// First check system PATH for readseek (standard cross-platform resolution)
+	try {
+		const { execSync } = require("child_process");
+		const systemBin = execSync("which readseek 2>/dev/null", { encoding: "utf-8" }).trim();
+		if (systemBin && require("fs").existsSync(systemBin)) {
+			return systemBin;
+		}
+	} catch {}
+
 	const platform = readSeekPlatform();
 	const platformPackage = READSEEK_PLATFORM_PACKAGES[platform];
 	if (!platformPackage) {
