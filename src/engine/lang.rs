@@ -60,9 +60,20 @@ impl From<Language> for u16 {
     }
 }
 
+static SPEC_BY_LANG: OnceLock<[Option<&'static LanguageSpec>; 40]> = OnceLock::new();
+
+fn init_spec_table() -> [Option<&'static LanguageSpec>; 40] {
+    let mut table = [None; 40];
+    for spec in LANGUAGE_SPECS {
+        table[spec.language as usize] = Some(spec);
+    }
+    table
+}
+
 impl Language {
     pub(crate) fn spec(self) -> Option<&'static LanguageSpec> {
-        LANGUAGE_SPECS.iter().find(|spec| spec.language == self)
+        let table = SPEC_BY_LANG.get_or_init(init_spec_table);
+        table.get(self as usize).copied().flatten()
     }
 
     pub(crate) fn id(self) -> &'static str {
