@@ -513,7 +513,9 @@ fn dot_q6_k_q8_k_scalar(row: &[u8], activation: &Q8KActivation) -> f32 {
 #[target_feature(enable = "avx2")]
 unsafe fn dot_q4_k_q8_k_avx2(row: &[u8], activation: &Q8KActivation) -> f32 {
     use std::arch::x86_64::{
-        _mm256_and_si256, _mm256_loadu_si256, _mm256_set1_epi8, _mm256_srli_epi16,
+        _mm256_add_epi32, _mm256_and_si256, _mm256_loadu_si256, _mm256_madd_epi16,
+        _mm256_maddubs_epi16, _mm256_set1_epi8, _mm256_set1_epi16, _mm256_setzero_si256,
+        _mm256_srli_epi16,
     };
 
     let mask = _mm256_set1_epi8(0x0f);
@@ -527,7 +529,7 @@ unsafe fn dot_q4_k_q8_k_avx2(row: &[u8], activation: &Q8KActivation) -> f32 {
         let quantized = &block[16..];
         let values = &activation.values[block_index * K_BLOCK_VALUES..][..K_BLOCK_VALUES];
         let sums = &activation.sums[block_index * 16..][..16];
-        let mut product_sum = 0_i32;
+        let mut product_sums = _mm256_setzero_si256();
         let mut minimum_sum = 0_i32;
         for group in 0..8 {
             let (group_scale, group_minimum) = q4_k_scale_min(scales, group);
@@ -542,9 +544,11 @@ unsafe fn dot_q4_k_q8_k_avx2(row: &[u8], activation: &Q8KActivation) -> f32 {
             };
             let activation_values =
                 unsafe { _mm256_loadu_si256(values.as_ptr().add(group * 32).cast()) };
-            product_sum +=
-                i32::from(group_scale) * unsafe { dot_u8_i8_avx2(unpacked, activation_values) };
+            let pairs = _mm256_maddubs_epi16(unpacked, activation_values);
+            let group_scales = _mm256_set1_epi16(i16::from(group_scale));
+            product_sums = _mm256_add_epi32(product_sums, _mm256_madd_epi16(pairs, group_scales));
         }
+        let product_sum = unsafe { horizontal_sum_i32_avx2(product_sums) };
         sum += scale * product_sum.to_f32().unwrap_or(0.0)
             + minimum * minimum_sum.to_f32().unwrap_or(0.0);
     }
@@ -662,22 +666,6 @@ unsafe fn dot_q6_k_q8_k_avx2(row: &[u8], activation: &Q8KActivation) -> f32 {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn dot_u8_i8_avx2(
-    left: std::arch::x86_64::__m256i,
-    right: std::arch::x86_64::__m256i,
-) -> i32 {
-    use std::arch::x86_64::{
-        _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_set1_epi16, _mm256_storeu_si256,
-    };
-    let pairs = _mm256_maddubs_epi16(left, right);
-    let lanes = _mm256_madd_epi16(pairs, _mm256_set1_epi16(1));
-    let mut sums = [0_i32; 8];
-    unsafe { _mm256_storeu_si256(sums.as_mut_ptr().cast(), lanes) };
-    sums.into_iter().sum()
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
 unsafe fn scaled_dot_i8_i8_avx2(
     left: std::arch::x86_64::__m256i,
     right: std::arch::x86_64::__m256i,
@@ -753,7 +741,7 @@ impl Q8Activation {
 enum Q8DotKernel {
     Scalar,
     #[cfg(target_arch = "x86_64")]
-    Avx2,
+    Avx2Fma,
     #[cfg(target_arch = "aarch64")]
     Neon,
 }
@@ -764,8 +752,8 @@ impl Q8DotKernel {
 
         *KERNEL.get_or_init(|| {
             #[cfg(target_arch = "x86_64")]
-            if std::is_x86_feature_detected!("avx2") {
-                return Self::Avx2;
+            if std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
+                return Self::Avx2Fma;
             }
             #[cfg(target_arch = "aarch64")]
             {
@@ -780,9 +768,9 @@ impl Q8DotKernel {
         match self {
             Self::Scalar => dot_q8_0_quantized_scalar(row, activation),
             #[cfg(target_arch = "x86_64")]
-            Self::Avx2 => {
-                // The variant is only constructed after runtime AVX2 detection.
-                unsafe { dot_q8_0_quantized_avx2(row, activation) }
+            Self::Avx2Fma => {
+                // The variant is only constructed after runtime AVX2 and FMA detection.
+                unsafe { dot_q8_0_quantized_avx2_fma(row, activation) }
             }
             #[cfg(target_arch = "aarch64")]
             Self::Neon => unsafe { dot_q8_0_quantized_neon(row, activation) },
@@ -853,38 +841,107 @@ unsafe fn dot_q8_0_quantized_neon(row: &[u8], activation: &Q8Activation) -> f32 
 }
 
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn dot_q8_0_quantized_avx2(row: &[u8], activation: &Q8Activation) -> f32 {
+#[target_feature(enable = "avx2,fma")]
+unsafe fn dot_q8_0_quantized_avx2_fma(row: &[u8], activation: &Q8Activation) -> f32 {
     use std::arch::x86_64::{
-        __m256i, _mm_add_epi32, _mm_cvtepi32_ps, _mm_cvtss_f32, _mm_shuffle_epi32,
-        _mm_unpackhi_epi64, _mm256_abs_epi8, _mm256_castsi256_si128, _mm256_extracti128_si256,
-        _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_set1_epi16, _mm256_sign_epi8,
+        _mm256_add_ps, _mm256_set1_epi16, _mm256_setzero_ps, _mm256_storeu_ps,
     };
 
     let ones = _mm256_set1_epi16(1);
-    let mut sum = 0.0;
-    for ((block, values), activation_scale) in row
-        .chunks_exact(Q8_0_BLOCK_BYTES)
-        .zip(activation.values.chunks_exact(Q8_0_BLOCK_VALUES))
-        .zip(&activation.scales)
+    let mut sum_0 = _mm256_setzero_ps();
+    let mut sum_1 = _mm256_setzero_ps();
+    let mut sum_2 = _mm256_setzero_ps();
+    let mut sum_3 = _mm256_setzero_ps();
+    let mut block_groups = row.chunks_exact(Q8_0_BLOCK_BYTES * 4);
+    let mut value_groups = activation.values.chunks_exact(Q8_0_BLOCK_VALUES * 4);
+    let mut scale_groups = activation.scales.chunks_exact(4);
+
+    for ((blocks, values), scales) in block_groups
+        .by_ref()
+        .zip(value_groups.by_ref())
+        .zip(scale_groups.by_ref())
     {
-        // `read_unaligned` is the intended unaligned read; codegen is identical
-        // to `_mm256_loadu_si256` and does not trigger `cast_ptr_alignment`.
-        let weights = unsafe { std::ptr::read_unaligned(block[2..].as_ptr().cast::<__m256i>()) };
-        let activations = unsafe { std::ptr::read_unaligned(values.as_ptr().cast::<__m256i>()) };
-        let signed_activations = _mm256_sign_epi8(activations, weights);
-        let weight_magnitudes = _mm256_abs_epi8(weights);
-        let pairs = _mm256_maddubs_epi16(weight_magnitudes, signed_activations);
-        let products = _mm256_madd_epi16(pairs, ones);
-        let low = _mm256_castsi256_si128(products);
-        let high = _mm256_extracti128_si256::<1>(products);
-        let lanes = _mm_add_epi32(low, high);
-        let pairs = _mm_add_epi32(lanes, _mm_unpackhi_epi64(lanes, lanes));
-        let total = _mm_add_epi32(pairs, _mm_shuffle_epi32::<0x55>(pairs));
-        let weight_scale = fp16_to_f32(u16::from_le_bytes([block[0], block[1]]));
-        sum += weight_scale * activation_scale * _mm_cvtss_f32(_mm_cvtepi32_ps(total));
+        sum_0 = unsafe {
+            accumulate_q8_0_block_avx2_fma(
+                sum_0,
+                &blocks[..Q8_0_BLOCK_BYTES],
+                &values[..Q8_0_BLOCK_VALUES],
+                scales[0],
+                ones,
+            )
+        };
+        sum_1 = unsafe {
+            accumulate_q8_0_block_avx2_fma(
+                sum_1,
+                &blocks[Q8_0_BLOCK_BYTES..Q8_0_BLOCK_BYTES * 2],
+                &values[Q8_0_BLOCK_VALUES..Q8_0_BLOCK_VALUES * 2],
+                scales[1],
+                ones,
+            )
+        };
+        sum_2 = unsafe {
+            accumulate_q8_0_block_avx2_fma(
+                sum_2,
+                &blocks[Q8_0_BLOCK_BYTES * 2..Q8_0_BLOCK_BYTES * 3],
+                &values[Q8_0_BLOCK_VALUES * 2..Q8_0_BLOCK_VALUES * 3],
+                scales[2],
+                ones,
+            )
+        };
+        sum_3 = unsafe {
+            accumulate_q8_0_block_avx2_fma(
+                sum_3,
+                &blocks[Q8_0_BLOCK_BYTES * 3..],
+                &values[Q8_0_BLOCK_VALUES * 3..],
+                scales[3],
+                ones,
+            )
+        };
     }
-    sum
+
+    for ((block, values), activation_scale) in block_groups
+        .remainder()
+        .chunks_exact(Q8_0_BLOCK_BYTES)
+        .zip(value_groups.remainder().chunks_exact(Q8_0_BLOCK_VALUES))
+        .zip(scale_groups.remainder())
+    {
+        sum_0 = unsafe {
+            accumulate_q8_0_block_avx2_fma(sum_0, block, values, *activation_scale, ones)
+        };
+    }
+
+    let sums = _mm256_add_ps(_mm256_add_ps(sum_0, sum_1), _mm256_add_ps(sum_2, sum_3));
+    let mut lanes = [0.0_f32; 8];
+    unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), sums) };
+    lanes.into_iter().sum()
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn accumulate_q8_0_block_avx2_fma(
+    sum: std::arch::x86_64::__m256,
+    block: &[u8],
+    values: &[i8],
+    activation_scale: f32,
+    ones: std::arch::x86_64::__m256i,
+) -> std::arch::x86_64::__m256 {
+    use std::arch::x86_64::{
+        __m256i, _mm256_abs_epi8, _mm256_cvtepi32_ps, _mm256_fmadd_ps, _mm256_madd_epi16,
+        _mm256_maddubs_epi16, _mm256_set1_ps, _mm256_sign_epi8,
+    };
+
+    // `read_unaligned` is the intended unaligned read; codegen is identical to
+    // `_mm256_loadu_si256` and does not trigger `cast_ptr_alignment`.
+    let weights = unsafe { std::ptr::read_unaligned(block[2..].as_ptr().cast::<__m256i>()) };
+    let activations = unsafe { std::ptr::read_unaligned(values.as_ptr().cast::<__m256i>()) };
+    let signed_activations = _mm256_sign_epi8(activations, weights);
+    let weight_magnitudes = _mm256_abs_epi8(weights);
+    let pairs = _mm256_maddubs_epi16(weight_magnitudes, signed_activations);
+    let products = _mm256_madd_epi16(pairs, ones);
+    let weight_scale = fp16_to_f32(u16::from_le_bytes([block[0], block[1]]));
+    let scale = weight_scale * activation_scale;
+    _mm256_fmadd_ps(_mm256_cvtepi32_ps(products), _mm256_set1_ps(scale), sum)
 }
 
 /// Return the index of the largest output from a quantized matrix-vector product.
@@ -1143,13 +1200,12 @@ pub(crate) fn matrix_matrix_triple(
     let activations = k_matrix_activations(vectors, row_count, input_size)?;
     if let [activation] = activations.as_slice() {
         return k_matrix_vector_triple(
-            first,
-            second,
-            third,
+            [
+                (first, first_size),
+                (second, second_size),
+                (third, third_size),
+            ],
             input_size,
-            first_size,
-            second_size,
-            third_size,
             activation,
         );
     }
@@ -1316,17 +1372,16 @@ fn k_matrix_vector_pair(
     Ok((left_output, right_output))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn k_matrix_vector_triple(
-    first: &Tensor,
-    second: &Tensor,
-    third: &Tensor,
+    matrices: [(&Tensor, usize); 3],
     input_size: usize,
-    first_size: usize,
-    second_size: usize,
-    third_size: usize,
     activation: &Q8KActivation,
 ) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>)> {
+    let [
+        (first, first_size),
+        (second, second_size),
+        (third, third_size),
+    ] = matrices;
     let third_start = first_size
         .checked_add(second_size)
         .ok_or_else(|| anyhow::anyhow!("triple K-quantized matrix output size overflow"))?;
