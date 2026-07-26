@@ -42,11 +42,21 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: Build pi-readseek TS to JS
+      - name: Build pi-readseek TS to JS & Update Package Exports
         run: |
           cd packages/pi-readseek
           npm install --ignore-scripts
           bun run build
+          cat << 'EOF' > update-pkg.py
+          import json
+          with open('package.json', 'r') as f:
+              pkg = json.load(f)
+          pkg['exports']['.'] = './dist/index.js'
+          pkg['pi']['extensions'] = ['./dist/index.js']
+          with open('package.json', 'w') as f:
+              json.dump(pkg, f, indent=2)
+          EOF
+          python3 update-pkg.py
           npm pack --ignore-scripts
           mv *.tgz ../../pi-readseek-0.8.11-android.1.tgz
       - name: Prepare NPM package directory & Tarball
