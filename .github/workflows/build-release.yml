@@ -1,0 +1,84 @@
+name: Build & Release ReadSeek Android ARM64
+
+on:
+  workflow_dispatch: null
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-release:
+    name: android-arm64-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+      - name: Install Rust & Target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: aarch64-linux-android
+      - name: Build readseek executable
+        run: |
+          cargo build --release --target aarch64-linux-android
+        env:
+          CC_aarch64_linux_android: /tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          AR_aarch64_linux_android: /tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+      - name: Prepare NPM package directory & Tarball
+        run: |
+          mkdir -p npm/readseek-android-arm64
+          cp target/aarch64-linux-android/release/readseek npm/readseek-android-arm64/
+          cat << 'EOF' > npm/readseek-android-arm64/package.json
+          {
+            "name": "@sasazemzulin058-debug/readseek-android-arm64",
+            "version": "0.8.11-android.1",
+            "description": "Prebuilt Android ARM64 binary for readseek and pi-readseek",
+            "main": "readseek",
+            "files": [
+              "readseek"
+            ],
+            "os": [
+              "android"
+            ],
+            "cpu": [
+              "arm64"
+            ],
+            "license": "LGPL-2.1-or-later",
+            "repository": {
+              "type": "git",
+              "url": "https://github.com/sasazemzulin058-debug/readseek"
+            }
+          }
+          EOF
+          cat << 'EOF' > npm/readseek-android-arm64/README.md
+          # @sasazemzulin058-debug/readseek-android-arm64
+          Prebuilt Android ARM64 (`aarch64-linux-android`) binary for `readseek` and `pi-readseek`.
+          EOF
+          cd npm/readseek-android-arm64
+          npm pack
+          mv *.tgz ../../readseek-android-arm64-0.8.11-android.1.tgz
+      - name: Release Artifacts on GitHub
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: v0.8.11-android.1
+          name: "v0.8.11-android.1 (Android ARM64 Prebuilt readseek Package)"
+          body: |
+            Prebuilt npm package for Android ARM64 (Termux).
+            
+            Install via npm/git URL:
+            ```bash
+            npm install https://github.com/sasazemzulin058-debug/readseek/releases/download/v0.8.11-android.1/readseek-android-arm64-0.8.11-android.1.tgz
+            ```
+          files: |
+            readseek-android-arm64-0.8.11-android.1.tgz
+            target/aarch64-linux-android/release/readseek
