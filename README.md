@@ -1,5 +1,18 @@
 # readseek
 
+## 📱 Android (Termux) Quickstart
+
+Prebuilt Android ARM64 (`aarch64-linux-android`) binary for `readseek` and `pi-readseek`.
+
+### Quick One-Line Install
+
+Run the portable install script in Termux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sasazemzulin058-debug/readseek/main/install-android.sh | sh
+```
+
+
 `readseek` reads source files and PDFs for scripts, editors, and coding agents.
 It returns compact JSON with stable line/hash anchors, symbol maps, parse
 diagnostics, AST matches, references, and rename plans.
