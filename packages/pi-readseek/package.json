@@ -56,7 +56,7 @@
     "@sinclair/typebox": "^0.34.48",
     "@types/node": "^26.1.1",
     "jiti": "^2.7.0",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.0"
   },
   "directories": {
